@@ -1,4 +1,4 @@
-name: Clean And Extract Project ZIP
+name: Clean Repository Except ZIP
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ permissions:
   contents: write
 
 jobs:
-  extract-project:
+  clean:
     runs-on: ubuntu-latest
 
     steps:
@@ -18,80 +18,22 @@ jobs:
 
       - name: Git Config
         run: |
-          git config --global user.name "github-actions"
-          git config --global user.email "actions@github.com"
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
 
-      - name: Clean Old Project (Keep ZIP)
+      - name: Delete Everything Except ZIP
         run: |
-          echo "Removing old project files..."
+          find . -mindepth 1 \
+          ! -path "./.git" \
+          ! -path "./.git/*" \
+          ! -name "telegram_ai_bot_fixed (1).zip" \
+          -exec rm -rf {} +
 
-          rm -rf bot
-          rm -rf admin
-          rm -rf handlers
-          rm -rf services
-          rm -rf extracted
-          rm -rf tests
-          rm -rf tests_stubs
-
-          rm -f main.py
-          rm -f Dockerfile
-          rm -f railway.toml
-          rm -f Procfile
-          rm -f README.md
-          rm -f requirements.txt
-          rm -f .env.example
-          rm -f .dockerignore
-          rm -f tests.py
-
-          echo "Old project removed"
-
-      - name: Install unzip
-        run: |
-          sudo apt update
-          sudo apt install -y unzip
-
-      - name: Extract ZIP
-        run: |
-          mkdir extracted
-
-          unzip -o "telegram_ai_bot_fixed (1).zip" -d extracted
-
-          echo "ZIP extracted"
-
-      - name: Detect Project Folder
-        run: |
-          echo "Searching project..."
-
-          PROJECT=$(find extracted -name "main.py" -exec dirname {} \; | head -1)
-
-          echo "PROJECT=$PROJECT" >> $GITHUB_ENV
-
-          echo "Found:"
-          echo $PROJECT
-
-      - name: Copy Correct Project
-        run: |
-          echo "Copying project..."
-
-          cp -r "$PROJECT"/* .
-          cp -r "$PROJECT"/.[!.]* . 2>/dev/null || true
-
-      - name: Verify Structure
-        run: |
-          echo "FINAL STRUCTURE"
-
+          echo "Done"
           ls -la
 
-          echo "---"
-
-          find bot -maxdepth 2 -type f || true
-
-      - name: Commit Update
+      - name: Commit Delete
         run: |
-          git add .
-
-          git commit -m "Clean old project and extract new ZIP" || echo "No changes"
-
-          git pull origin main --rebase || true
-
+          git add -A
+          git commit -m "Delete all files except ZIP" || true
           git push origin main --force
