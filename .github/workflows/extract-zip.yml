@@ -1,4 +1,4 @@
-name: Extract ZIP And Clean
+name: Extract VIP ZIP
 
 on:
   workflow_dispatch:
@@ -11,76 +11,58 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-
       - name: Git Config
         run: |
-          git config --global user.name "github-actions"
-          git config --global user.email "actions@github.com"
-
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
 
       - name: Extract ZIP
         run: |
-
-          echo "Extracting ZIP..."
-
           mkdir temp
+          unzip -o vip.zip -d temp
 
-          unzip -o "telegram_ai_bot_fixed (1).zip" -d temp
-
-          echo "ZIP files:"
+          echo "ZIP CONTENT:"
           find temp -maxdepth 3 -type f
 
 
-      - name: Clean Old Files Except ZIP
+      - name: Find Project
         run: |
+          MAIN=$(find temp -name "main.py" | head -1)
 
-          echo "Cleaning old files..."
+          if [ -z "$MAIN" ]; then
+            echo "main.py not found"
+            exit 1
+          fi
 
-          find . -mindepth 1 \
-          ! -path "./.git*" \
-          ! -name "telegram_ai_bot_fixed (1).zip" \
-          ! -path "./temp*" \
-          -exec rm -rf {} +
+          DIR=$(dirname "$MAIN")
+
+          echo "DIR=$DIR" >> $GITHUB_ENV
 
 
-      - name: Move Extracted Project
+      - name: Copy Project
         run: |
-
-          echo "Moving project..."
-
-          cp -r temp/*/* . 2>/dev/null || cp -r temp/* .
-
-          cp -r temp/*/.* . 2>/dev/null || true
+          cp -r "$DIR"/* .
+          cp -r "$DIR"/.[!.]* . 2>/dev/null || true
 
 
-      - name: Remove Temporary Folder
+      - name: Remove Temp
         run: |
           rm -rf temp
 
 
-      - name: Check Final Structure
+      - name: Check
         run: |
-
-          echo "FINAL PROJECT"
-
           ls -la
-
-          echo "---"
-
           find . -maxdepth 2 -type f
 
 
-      - name: Commit Changes
+      - name: Commit
         run: |
-
-          git add -A
-
-          git commit -m "Extract fresh project from ZIP" || echo "No changes"
-
+          git add .
+          git commit -m "Extract VIP project" || true
           git push origin main --force
