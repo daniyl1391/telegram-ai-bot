@@ -1,4 +1,4 @@
-name: Update AI Bot From ZIP
+name: Clean And Extract Project ZIP
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ permissions:
   contents: write
 
 jobs:
-  update:
+  extract-project:
     runs-on: ubuntu-latest
 
     steps:
@@ -16,15 +16,23 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Git config
+      - name: Git Config
         run: |
           git config --global user.name "github-actions"
           git config --global user.email "actions@github.com"
 
-      - name: Remove old project files
+      - name: Clean Old Project (Keep ZIP)
         run: |
+          echo "Removing old project files..."
+
           rm -rf bot
+          rm -rf admin
+          rm -rf handlers
+          rm -rf services
+          rm -rf extracted
+          rm -rf tests
           rm -rf tests_stubs
+
           rm -f main.py
           rm -f Dockerfile
           rm -f railway.toml
@@ -35,6 +43,8 @@ jobs:
           rm -f .dockerignore
           rm -f tests.py
 
+          echo "Old project removed"
+
       - name: Install unzip
         run: |
           sudo apt update
@@ -43,25 +53,44 @@ jobs:
       - name: Extract ZIP
         run: |
           mkdir extracted
+
           unzip -o "telegram_ai_bot_fixed (1).zip" -d extracted
 
-      - name: Copy project files
-        run: |
-          cp -r extracted/*/* . 2>/dev/null || true
-          cp -r extracted/*/.* . 2>/dev/null || true
+          echo "ZIP extracted"
 
-      - name: Check final structure
+      - name: Detect Project Folder
         run: |
-          echo "FINAL PROJECT:"
+          echo "Searching project..."
+
+          PROJECT=$(find extracted -name "main.py" -exec dirname {} \; | head -1)
+
+          echo "PROJECT=$PROJECT" >> $GITHUB_ENV
+
+          echo "Found:"
+          echo $PROJECT
+
+      - name: Copy Correct Project
+        run: |
+          echo "Copying project..."
+
+          cp -r "$PROJECT"/* .
+          cp -r "$PROJECT"/.[!.]* . 2>/dev/null || true
+
+      - name: Verify Structure
+        run: |
+          echo "FINAL STRUCTURE"
+
           ls -la
-          echo "BOT:"
-          find bot -maxdepth 2 -type f
 
-      - name: Commit changes
+          echo "---"
+
+          find bot -maxdepth 2 -type f || true
+
+      - name: Commit Update
         run: |
           git add .
 
-          git commit -m "Update Telegram AI Bot" || echo "No changes"
+          git commit -m "Clean old project and extract new ZIP" || echo "No changes"
 
           git pull origin main --rebase || true
 
