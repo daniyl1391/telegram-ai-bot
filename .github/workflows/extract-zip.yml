@@ -1,0 +1,86 @@
+name: Extract ZIP And Clean
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+
+      - name: Git Config
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "actions@github.com"
+
+
+      - name: Extract ZIP
+        run: |
+
+          echo "Extracting ZIP..."
+
+          mkdir temp
+
+          unzip -o "telegram_ai_bot_fixed (1).zip" -d temp
+
+          echo "ZIP files:"
+          find temp -maxdepth 3 -type f
+
+
+      - name: Clean Old Files Except ZIP
+        run: |
+
+          echo "Cleaning old files..."
+
+          find . -mindepth 1 \
+          ! -path "./.git*" \
+          ! -name "telegram_ai_bot_fixed (1).zip" \
+          ! -path "./temp*" \
+          -exec rm -rf {} +
+
+
+      - name: Move Extracted Project
+        run: |
+
+          echo "Moving project..."
+
+          cp -r temp/*/* . 2>/dev/null || cp -r temp/* .
+
+          cp -r temp/*/.* . 2>/dev/null || true
+
+
+      - name: Remove Temporary Folder
+        run: |
+          rm -rf temp
+
+
+      - name: Check Final Structure
+        run: |
+
+          echo "FINAL PROJECT"
+
+          ls -la
+
+          echo "---"
+
+          find . -maxdepth 2 -type f
+
+
+      - name: Commit Changes
+        run: |
+
+          git add -A
+
+          git commit -m "Extract fresh project from ZIP" || echo "No changes"
+
+          git push origin main --force
