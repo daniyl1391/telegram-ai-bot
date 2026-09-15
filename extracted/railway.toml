@@ -1,0 +1,11 @@
+[build]
+builder = "dockerfile"
+
+[deploy]
+startCommand = "python -u main.py"
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 10
+# Long polling means exactly one instance may run: two would fight over
+# getUpdates and Telegram would return "Conflict: terminated by other
+# getUpdates request".
+numReplicas = 1
