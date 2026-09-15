@@ -3,26 +3,35 @@ name: Update Project From ZIP
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
-  update:
+  update-project:
     runs-on: ubuntu-latest
 
-    permissions:
-      contents: write
-
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Remove old extracted files
+      - name: Configure Git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Remove old project files
         run: |
           rm -rf bot
+          rm -rf tests
+          rm -rf vps-bot
           rm -rf extracted
           rm -f main.py
           rm -f Dockerfile
+          rm -f README.md
           rm -f requirements.txt
           rm -f railway.toml
-          rm -f README.md
           rm -f tests.py
 
       - name: Install unzip
@@ -30,29 +39,40 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y unzip
 
-      - name: Extract new ZIP
+      - name: Extract ZIP
         run: |
           mkdir extracted
           unzip -o telegram_ai_bot_complete.zip -d extracted
 
-      - name: Copy project files
+      - name: Find project folder
         run: |
-          cp -r extracted/*/* . || true
-          cp -r extracted/*/.* . 2>/dev/null || true
+          echo "Finding files..."
+          find extracted -maxdepth 3 -type f | head -50
 
-      - name: Show result
+      - name: Move project to root
         run: |
-          echo "Updated structure:"
+          PROJECT=$(find extracted -mindepth 1 -maxdepth 1 -type d | head -1)
+
+          echo "Project folder:"
+          echo $PROJECT
+
+          cp -r "$PROJECT"/* .
+          cp -r "$PROJECT"/.[!.]* . 2>/dev/null || true
+
+      - name: Show final structure
+        run: |
+          echo "Final files:"
           ls -la
-          find bot -maxdepth 3 -type f || true
+          echo ""
+          echo "Folders:"
+          find . -maxdepth 2 -type d
 
-      - name: Commit update
+      - name: Commit and Force Push
         run: |
-          git config --global user.name "github-actions"
-          git config --global user.email "actions@github.com"
-
           git add .
 
-          git commit -m "Update project from new ZIP" || echo "No changes"
+          git commit -m "Update project from ZIP automatically" || echo "No changes"
 
-          git push
+          git pull origin main --rebase || true
+
+          git push origin main --force
