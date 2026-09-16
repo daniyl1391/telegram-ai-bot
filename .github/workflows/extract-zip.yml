@@ -1,4 +1,4 @@
-name: Extract VIP ZIP
+name: Update Project From ZIP
 
 on:
   workflow_dispatch:
@@ -7,62 +7,75 @@ permissions:
   contents: write
 
 jobs:
-  extract:
+  update:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Git Config
-        run: |
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
-      - name: Extract ZIP
-        run: |
-          mkdir temp
-          unzip -o vip.zip -d temp
+    - name: Git Config
+      run: |
+        git config user.name "github-actions"
+        git config user.email "actions@github.com"
 
-          echo "ZIP CONTENT:"
-          find temp -maxdepth 3 -type f
+    - name: Clean Old Project
+      run: |
+        find . -mindepth 1 \
+        ! -path "./.git" \
+        ! -path "./.git/*" \
+        ! -path "./.github" \
+        ! -path "./.github/*" \
+        ! -name "telegram_ai_bot_fixed (1).zip" \
+        -exec rm -rf {} +
+
+        echo "Old files deleted"
+
+    - name: Wait
+      run: |
+        sleep 13
+
+    - name: Extract ZIP
+      run: |
+        mkdir extracted
+
+        unzip -o "telegram_ai_bot_fixed (1).zip" -d extracted
+
+        echo "ZIP extracted"
+
+        find extracted -maxdepth 3 -type f | head -100
+
+    - name: Copy Project To Root
+      run: |
+
+        PROJECT=$(find extracted -name "main.py" | head -1 | xargs dirname)
+
+        echo "Project found:"
+        echo $PROJECT
+
+        cp -r "$PROJECT"/* .
+        cp -r "$PROJECT"/.[!.]* . 2>/dev/null || true
 
 
-      - name: Find Project
-        run: |
-          MAIN=$(find temp -name "main.py" | head -1)
+    - name: Remove Extract Folder
+      run: |
+        rm -rf extracted
 
-          if [ -z "$MAIN" ]; then
-            echo "main.py not found"
-            exit 1
-          fi
-
-          DIR=$(dirname "$MAIN")
-
-          echo "DIR=$DIR" >> $GITHUB_ENV
+    - name: Check Files
+      run: |
+        echo "Final structure:"
+        ls -la
+        echo "---"
+        find . -maxdepth 2 -type f
 
 
-      - name: Copy Project
-        run: |
-          cp -r "$DIR"/* .
-          cp -r "$DIR"/.[!.]* . 2>/dev/null || true
+    - name: Commit Update
+      run: |
+        git add -A
 
+        git commit -m "Update project from telegram_ai_bot_fixed ZIP" || echo "No changes"
 
-      - name: Remove Temp
-        run: |
-          rm -rf temp
-
-
-      - name: Check
-        run: |
-          ls -la
-          find . -maxdepth 2 -type f
-
-
-      - name: Commit
-        run: |
-          git add .
-          git commit -m "Extract VIP project" || true
-          git push origin main --force
+        git push origin main --force
