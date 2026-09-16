@@ -2,6 +2,7 @@
 import logging
 
 from bot.database import get_db, parse_iso, utcnow
+from bot.capabilities import enabled as capability_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -31,10 +32,24 @@ class SubscriptionManager:
         )
         return db.get_subscription(user_id)
 
-    @staticmethod
-    def _mode(sub):
+    def _mode(self, user_id, sub):
         mode = str((sub or {}).get("quota_mode") or "messages").lower()
-        return mode if mode in ("messages", "tokens", "both") else "messages"
+        if mode not in ("messages", "tokens", "both"):
+            mode = "messages"
+        messages_on = capability_enabled(user_id, "message_quota")
+        tokens_on = capability_enabled(user_id, "token_quota")
+        if mode == "tokens" and not tokens_on:
+            return "messages"
+        if mode == "messages" and not messages_on and tokens_on:
+            return "tokens"
+        if mode == "both":
+            if not capability_enabled(user_id, "both_quota"):
+                mode = "messages" if messages_on else "tokens"
+            elif messages_on and tokens_on:
+                return "both"
+            else:
+                return "messages" if messages_on else "tokens"
+        return mode
 
     def status(self, user_id):
         """Return ``(state, subscription)`` without mutating quota."""
@@ -45,7 +60,7 @@ class SubscriptionManager:
         if expire and expire < utcnow():
             return EXPIRED, sub
 
-        mode = self._mode(sub)
+        mode = self._mode(user_id, sub)
         message_exhausted = int(sub.get("message_used") or 0) >= int(sub.get("message_limit") or 0)
         token_limit = int(sub.get("token_limit") or 0)
         token_exhausted = token_limit <= 0 or int(sub.get("token_used") or 0) >= token_limit
@@ -65,7 +80,7 @@ class SubscriptionManager:
             return 0
         messages = max(0, int(sub.get("message_limit") or 0) - int(sub.get("message_used") or 0))
         tokens = max(0, int(sub.get("token_limit") or 0) - int(sub.get("token_used") or 0))
-        mode = self._mode(sub)
+        mode = self._mode(user_id, sub)
         if mode == "tokens":
             return tokens
         if mode == "both":
@@ -89,11 +104,12 @@ class SubscriptionManager:
         return True
 
     def grant_plan(self, user_id, plan, message_limit, duration_days,
-                   quota_mode="messages", token_limit=0, model_scope="all"):
+                   quota_mode="messages", token_limit=0, model_scope="all",
+                   feature_policy=None):
         db = get_db()
         db.create_subscription(user_id, plan, message_limit, duration_days,
                                quota_mode=quota_mode, token_limit=token_limit,
-                               model_scope=model_scope)
+                               model_scope=model_scope, feature_policy=feature_policy)
         return db.get_subscription(user_id)
 
     def set_quota(self, user_id, limit):

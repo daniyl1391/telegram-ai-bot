@@ -5,6 +5,7 @@ from bot.config import ADMIN_USER_IDS
 from bot.database import get_db, parse_iso
 from bot.i18n import t
 from bot.security import esc, check_flood, check_duplicate, MAX_MESSAGE_CHARS
+from bot.capabilities import FEATURE_MAP, enabled as capability_enabled
 from bot.handlers.common import (
     lang_of, safe_edit, reply, parse_callback, set_flow, clear_flow, get_flow,
 )
@@ -19,7 +20,9 @@ async def support_open(update, context):
         await query.answer()
     lang = lang_of(update, context)
     clear_flow(context)
-    if not get_db().get_bool_setting("support_enabled", True):
+    if not capability_enabled(update.effective_user.id, "support_tickets"):
+        text, markup = t("feature_disabled", lang, feature=FEATURE_MAP["support_tickets"].label(lang)), kb.back_to_main(lang)
+    elif not get_db().get_bool_setting("support_enabled", True):
         text, markup = t("support_disabled", lang), kb.back_to_main(lang)
     else:
         text, markup = t("support_title", lang), kb.support_menu(lang)
@@ -31,6 +34,9 @@ async def support_open(update, context):
 async def support_new(update, context):
     query = update.callback_query
     lang = lang_of(update, context)
+    if not capability_enabled(update.effective_user.id, "support_tickets"):
+        await query.answer(t("feature_disabled", lang, feature=FEATURE_MAP["support_tickets"].label(lang)), show_alert=True)
+        return None
     if not get_db().get_bool_setting("support_enabled", True):
         await query.answer(t("support_disabled", lang), show_alert=True)
         return None

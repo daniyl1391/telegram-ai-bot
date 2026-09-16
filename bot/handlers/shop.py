@@ -5,6 +5,7 @@ from bot.config import ADMIN_USER_IDS
 from bot.database import get_db
 from bot.i18n import t
 from bot.security import esc, format_card, check_flood
+from bot.capabilities import FEATURE_MAP, enabled as capability_enabled
 from bot.services.payment import payment_manager, PaymentError, METHOD_CARD, METHOD_GATEWAY
 from bot.handlers.common import (
     lang_of, safe_edit, reply, parse_callback, set_flow, clear_flow, get_flow,
@@ -29,7 +30,9 @@ async def shop_list(update, context):
     db = get_db()
     clear_flow(context)
 
-    if not db.get_bool_setting("shop_enabled", True):
+    if not capability_enabled(update.effective_user.id, "shop"):
+        text, markup = t("feature_disabled", lang, feature=FEATURE_MAP["shop"].label(lang)), kb.back_to_main(lang)
+    elif not db.get_bool_setting("shop_enabled", True):
         text, markup = t("shop_disabled", lang), kb.back_to_main(lang)
     else:
         products = db.get_products()
@@ -89,6 +92,9 @@ async def pay_card(update, context):
     _, args = parse_callback(query.data)
     product_id = _int(args[-1])
 
+    if not capability_enabled(update.effective_user.id, "card_payment"):
+        await query.answer(t("feature_disabled", lang, feature=FEATURE_MAP["card_payment"].label(lang)), show_alert=True)
+        return None
     card, holder = payment_manager.card_details()
     if not card:
         await query.answer(t("pay_card_not_configured", lang), show_alert=True)
@@ -117,6 +123,9 @@ async def pay_gateway(update, context):
     _, args = parse_callback(query.data)
     product_id = _int(args[-1])
 
+    if not capability_enabled(update.effective_user.id, "gateway_payment"):
+        await query.answer(t("feature_disabled", lang, feature=FEATURE_MAP["gateway_payment"].label(lang)), show_alert=True)
+        return None
     if not payment_manager.gateway_enabled():
         await query.answer(t("pay_gateway_not_configured", lang), show_alert=True)
         return None

@@ -15,7 +15,7 @@ from bot.config import (
 )
 from bot.database import get_db
 from bot.handlers import admin as admin_handlers
-from bot.handlers import ai_chat, shop, start as start_handlers, support
+from bot.handlers import ai_chat, features, shop, start as start_handlers, support
 from bot.handlers.errors import error_handler
 from bot.handlers.router import route_message, unknown_command
 
@@ -58,6 +58,11 @@ def register_handlers(app):
     app.add_handler(CallbackQueryHandler(ai_chat.model_picker, pattern=r"^ai:models$"))
     app.add_handler(CallbackQueryHandler(ai_chat.clear_history, pattern=r"^ai:clear$"))
     app.add_handler(CallbackQueryHandler(ai_chat.model_use, pattern=r"^ai:use:\d+$"))
+    app.add_handler(CallbackQueryHandler(features.style_menu, pattern=r"^ai:style$"))
+    app.add_handler(CallbackQueryHandler(features.set_style, pattern=r"^ai:style:(concise|balanced|detailed|formal)$"))
+    app.add_handler(CallbackQueryHandler(features.tools_menu, pattern=r"^tools:(menu|page:[1-3])$"))
+    app.add_handler(CallbackQueryHandler(features.use_tool, pattern=r"^tools:use:(summarize|translate|rewrite|code|receipt|deep|search|research|factcheck|compare|email|resume|marketing|url|json|bullets|table|calculator|datetime|export)$"))
+    app.add_handler(CallbackQueryHandler(features.usage, pattern=r"^usage:view$"))
 
     app.add_handler(CallbackQueryHandler(shop.shop_list, pattern=r"^shop:list$"))
     app.add_handler(CallbackQueryHandler(shop.shop_item, pattern=r"^shop:item:\d+$"))

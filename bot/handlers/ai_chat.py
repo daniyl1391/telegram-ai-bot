@@ -1,5 +1,6 @@
 """AI chat handler: multimodal inputs, fast streaming edits and fair metering."""
 import logging
+import os
 import time
 
 from telegram.constants import ChatAction
@@ -12,6 +13,8 @@ from bot.services.subscription import subscription_manager, OK, EXPIRED
 from bot.handlers.common import (
     lang_of, safe_edit, reply, parse_callback, clear_flow, set_flow, send_kwargs,
 )
+from bot.handlers.features import instruction_for, current_tool, safe_calculate, requires_browsing, prepare_external_context
+from bot.capabilities import FEATURE_MAP, enabled as capability_enabled, value_for_user
 from bot.media import prepare_attachment, MediaError
 from bot import keyboards as kb
 
@@ -56,7 +59,12 @@ async def open_ai(update, context):
             model=esc(_active_model_name(update.effective_user.id, context) or "-"),
             remaining=subscription_manager.remaining(update.effective_user.id),
         )
-        markup = kb.ai_menu(lang, has_multiple_models=len(models) > 1)
+        markup = kb.ai_menu(
+            lang,
+            has_multiple_models=len(models) > 1,
+            allow_model_selection=capability_enabled(update.effective_user.id, "custom_model_selection"),
+            allow_tools=capability_enabled(update.effective_user.id, "quick_tools"),
+        )
     if query:
         return await safe_edit(query, text, markup)
     return await reply(update, text, markup)
@@ -66,6 +74,9 @@ async def model_picker(update, context):
     query = update.callback_query
     await query.answer()
     lang = lang_of(update, context)
+    if not capability_enabled(update.effective_user.id, "custom_model_selection"):
+        await query.answer(t("feature_disabled", lang, feature=FEATURE_MAP["custom_model_selection"].label(lang)), show_alert=True)
+        return await open_ai(update, context)
     models = ai_manager.list_models(user_id=update.effective_user.id)
     if not models:
         return await safe_edit(query, t("ai_no_models", lang), kb.back_to_main(lang))
@@ -82,6 +93,9 @@ async def model_use(update, context):
         model_pk = int(args[-1])
     except (ValueError, IndexError):
         await query.answer(t("unknown_action", lang), show_alert=True)
+        return None
+    if not capability_enabled(update.effective_user.id, "custom_model_selection"):
+        await query.answer(t("feature_disabled", lang, feature=FEATURE_MAP["custom_model_selection"].label(lang)), show_alert=True)
         return None
     model = get_db().get_ai_model(model_pk)
     if not model or not model["status"] or not ai_manager.is_model_allowed(update.effective_user.id, model):
@@ -122,12 +136,38 @@ async def handle_prompt(update, context):
 
     is_attachment = bool(getattr(message, "photo", None) or getattr(message, "document", None))
     prompt = (getattr(message, "text", None) or getattr(message, "caption", None) or "").strip()
+    if not capability_enabled(user_id, "chat"):
+        return await reply(update, t("feature_disabled", lang, feature=FEATURE_MAP["chat"].label(lang)))
+    if is_attachment:
+        document = getattr(message, "document", None)
+        suffix = (os.path.splitext(getattr(document, "file_name", ""))[1].lower() if document else "")
+        required = "file_uploads"
+        if getattr(message, "photo", None):
+            required = "vision_images"
+        elif suffix == ".zip":
+            required = "zip_files"
+        elif suffix == ".pdf":
+            required = "pdf_files"
+        elif suffix == ".docx":
+            required = "docx_files"
+        elif suffix in {".py", ".js", ".ts", ".java", ".go", ".rs", ".c", ".cpp", ".h", ".sql"}:
+            required = "code_files"
+        elif suffix in {".csv", ".tsv", ".xlsx", ".xls"}:
+            required = "spreadsheet_files"
+        elif suffix in {".txt", ".md", ".json", ".xml", ".html", ".htm", ".log", ".yaml", ".yml"}:
+            required = "text_files"
+        if not capability_enabled(user_id, required):
+            return await reply(update, t("feature_disabled", lang, feature=FEATURE_MAP[required].label(lang)))
+        if suffix == ".zip" and not capability_enabled(user_id, "archive_extraction"):
+            return await reply(update, t("feature_disabled", lang, feature=FEATURE_MAP["archive_extraction"].label(lang)))
     if is_attachment:
         try:
-            max_bytes = max(1, db.get_int_setting("max_file_mb", 10)) * 1024 * 1024
+            max_bytes = max(1, int(value_for_user(user_id, "max_file_mb") or 10)) * 1024 * 1024
             prompt, _label = await prepare_attachment(
                 message, context.bot, max_bytes,
                 default_prompt=t("attachment_default_prompt", lang),
+                max_archive_files=int(value_for_user(user_id, "max_archive_files") or 20),
+                max_extracted_chars=int(value_for_user(user_id, "max_extracted_chars") or 30000),
             )
         except MediaError as exc:
             return await reply(update, t("attachment_error", lang, detail=esc(str(exc))))
@@ -151,6 +191,15 @@ async def handle_prompt(update, context):
     if not check_duplicate(user_id, visible_prompt):
         return await reply(update, t("spam_duplicate", lang))
 
+    if current_tool(context) == "calculator" and not is_attachment:
+        try:
+            result = safe_calculate(prompt)
+            context.user_data.pop("ai_tool", None)
+            return await reply(update, t("calculator_result", lang, result=esc(result)), kb.usage_menu(lang))
+        except (ValueError, SyntaxError, ZeroDivisionError):
+            context.user_data.pop("ai_tool", None)
+            return await reply(update, t("calculator_error", lang), kb.usage_menu(lang))
+
     state, _sub = subscription_manager.status(user_id)
     if state == EXPIRED:
         return await reply(update, t("sub_expired", lang),
@@ -170,7 +219,7 @@ async def handle_prompt(update, context):
 
     stream_state = {"answer": "", "last_edit": 0.0}
     interval = max(100, db.get_int_setting("stream_edit_interval_ms", 700)) / 1000.0
-    stream_enabled = db.get_bool_setting("ai_streaming", True)
+    stream_enabled = db.get_bool_setting("ai_streaming", True) and capability_enabled(user_id, "streaming")
 
     async def on_delta(delta):
         stream_state["answer"] += str(delta or "")
@@ -184,9 +233,21 @@ async def handle_prompt(update, context):
             )
 
     try:
+        extra_instruction = instruction_for(context)
+        if requires_browsing(context):
+            try:
+                await placeholder.edit_text(t("tool_searching", lang), **send_kwargs())
+            except Exception:
+                pass
+            try:
+                extra_instruction += "\n" + await prepare_external_context(visible_prompt, context)
+            except Exception as exc:
+                logger.warning("web tool failed for user %s: %s", user_id, exc)
+                extra_instruction += "\nBrowsing was unavailable. Say that current sources could not be verified."
         answer, model_name = await ai_manager.chat(
             user_id, prompt, model_pk=context.user_data.get("model_pk"),
             stream_callback=on_delta if stream_enabled else None,
+            extra_instruction=extra_instruction,
         )
     except AIError as exc:
         logger.warning("AI failed for user %s: %s", user_id, exc)
@@ -200,6 +261,7 @@ async def handle_prompt(update, context):
         return await reply(update, text)
 
     usage = ai_manager.last_usage(user_id)
+    context.user_data.pop("ai_tool", None)
     subscription_manager.consume(user_id, tokens=usage.get("total_tokens", 0))
     remaining = subscription_manager.remaining(user_id)
     body = _answer_body(answer, model_name, lang, remaining, usage)

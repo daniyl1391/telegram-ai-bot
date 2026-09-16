@@ -58,9 +58,10 @@ missing or malformed, instead of crashing on an opaque `InvalidToken`.
 - **Fast progressive streaming**: compatible providers stream tokens and the bot
   edits one Telegram message at a controlled interval, with an automatic JSON
   fallback when a provider does not support streaming.
-- **Multimodal input**: send a photo with a caption, PDF, DOCX, TXT, CSV, JSON or
-  code file and the bot downloads it safely, extracts text or sends an image data
-  URL to a vision-capable model. Receipt photos remain in the payment-review flow.
+- **Multimodal input**: send a photo with a caption, PDF, DOCX, TXT, CSV, JSON,
+  XLSX or code file and the bot downloads it safely, extracts text or sends an
+  image data URL to a vision-capable model. Receipt photos remain in the
+  payment-review flow.
 - **Multi-model**: add as many providers as you want from the panel. A paid plan
   can be restricted to selected model IDs/names, or allowed to use all models.
 - **OpenAI-compatible** request format, so OpenAI, OpenRouter, Groq, Together,
@@ -85,16 +86,33 @@ missing or malformed, instead of crashing on an opaque `InvalidToken`.
 | 🎫 Tickets | Open ticket list, full conversation view, reply to the user, close |
 | 📊 Stats | Users, new today, active subscriptions, AI messages, confirmed revenue, pending payments, open tickets |
 | ⚙️ Settings | Free message/token quota, quota mode, rate limit, stream speed, output limit, file size, history, system prompt, model scope, shop/support toggles |
+| ⚡ Capabilities | Independently toggle/cycle all 50 capabilities globally, per product and per user subscription |
 | 📢 Broadcast | Send a message to every non-banned user |
 
-### 🧮 Quota and plan policy
-- Each product can define message quota, token quota, duration, and an allowed
-  model scope (`all` or comma-separated model names/IDs).
-- Admins can grant the same product to a user without a payment.
-- Usage is recorded in `ai_usage` with prompt/completion/total tokens, latency and
-  input type (`text`/`image`). The account screen shows token consumption.
+### 🎛 Button-first UX
+- The main menu exposes quick tools, usage, model selection, response style and
+  account actions as inline buttons.
+- **20 quick tools** in three button pages: deep thinking, web search,
+  multi-source research, fact-check, URL analysis, smart comparison,
+  summarization, translation, professional rewrite, coding, receipt analysis,
+  email writer, resume builder, marketing copy, JSON/bullet/table formatting,
+  safe calculator, UTC date/time and chat export.
+- **Response style**: concise, balanced, detailed or formal.
+- Admin quota and policy screens use preset buttons for modes and amounts; text is
+  retained only as a custom-value fallback.
 
-### 💳 Payments
+### ⚡ 50 granular capabilities
+- A dedicated **⚡ Capabilities** screen lets the admin configure every one of
+  the 50 capabilities independently at three scopes: global, product/plan and
+  a user's active subscription.
+- Boolean features toggle with one tap; numeric limits cycle through safe presets.
+  This covers deep thinking, browsing, tools, model scope, memory, PDF/DOCX/text,
+  ZIP uploads, archive extraction, file size, archive file count, extracted text
+  size, quotas, payments, shop and support.
+- A product's policy is copied into a subscription at purchase/grant time, so an
+  existing customer's permissions remain stable after a later product edit.
+- ZIP files are inspected in memory with path-traversal and decompression-bomb
+  limits; the model receives extracted text, not an unsafe filesystem extraction.
 Card-to-card with manual approval: the user picks a product, sees your card
 number, sends a receipt photo or reference number, and every admin instantly gets
 a notification with **✅ Confirm / ❌ Reject** buttons. Approving activates the
@@ -134,14 +152,16 @@ bot/
 │   ├── common.py          language, safe edit, the FSM
 │   ├── router.py          the single text/photo entry point
 │   ├── start.py           /start, language, account, navigation
-│   ├── ai_chat.py         AI conversation
+│   ├── ai_chat.py         streaming multimodal AI conversation
+│   ├── features.py        button-first tools, styles and usage dashboard
 │   ├── shop.py            shop + checkout + receipts
 │   ├── support.py         tickets
 │   ├── admin.py           the admin panel
 │   └── errors.py          global error handler
 ├── services/
 │   ├── ai_manager.py      streaming provider client, retries, key rotation, usage
-│   ├── payment.py         atomic approval flow
+│   ├── web_search.py       keyless search, source formatting and URL extraction
+│   ├── payment.py          atomic approval flow
 │   └── subscription.py    message/token quotas and model policy
 ├── media.py               safe photo/PDF/DOCX/text attachment pipeline
 └── admin/panel.py         privileged write operations

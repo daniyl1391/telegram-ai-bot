@@ -6,6 +6,7 @@ import logging
 import time
 
 from bot.database import get_db
+from bot.capabilities import enabled as capability_enabled, value_for_user
 
 logger = logging.getLogger(__name__)
 
@@ -160,6 +161,7 @@ class AIManager:
         self._history = {}
         self._last_usage = {}
         self._stream_callback = contextvars.ContextVar("ai_stream_callback", default=None)
+        self._key_rotation = contextvars.ContextVar("ai_key_rotation", default=True)
 
     # ------------------------------------------------------------- model access
     @staticmethod
@@ -172,6 +174,8 @@ class AIManager:
 
     def is_model_allowed(self, user_id, model):
         sub = get_db().get_subscription(user_id)
+        if not capability_enabled(user_id, "model_scope"):
+            return True
         return self._scope_allows(model, (sub or {}).get("model_scope", "all"))
 
     def list_models(self, only_active=True, user_id=None):
@@ -179,6 +183,8 @@ class AIManager:
         if user_id is None:
             return models
         sub = get_db().get_subscription(user_id)
+        if not capability_enabled(user_id, "model_scope"):
+            return models
         scope = (sub or {}).get("model_scope", "all")
         return [m for m in models if self._scope_allows(m, scope)]
 
@@ -272,11 +278,14 @@ class AIManager:
             headers["api-key"] = api_key
         return headers
 
-    async def _request_standard(self, model, messages, timeout_s, max_retries, session_factory=None):
+    async def _request_standard(self, model, messages, timeout_s, max_retries, session_factory=None,
+                                allow_key_rotation=True):
         import aiohttp
         if session_factory is None:
             session_factory = aiohttp.ClientSession
         keys = _split_keys(model.get("api_key")) or [""]
+        if not allow_key_rotation:
+            keys = keys[:1]
         payload = self._payload(model, messages)
         last_error = "unknown error"
         total_attempts = max(1, max_retries) * len(keys)
@@ -314,10 +323,13 @@ class AIManager:
                     await asyncio.sleep(backoff)
         raise AIError(last_error)
 
-    async def _request_stream(self, model, messages, timeout_s, max_retries, callback):
+    async def _request_stream(self, model, messages, timeout_s, max_retries, callback,
+                              allow_key_rotation=True):
         """Read OpenAI-compatible SSE and emit deltas as soon as they arrive."""
         import aiohttp
         keys = _split_keys(model.get("api_key")) or [""]
+        if not allow_key_rotation:
+            keys = keys[:1]
         payload = self._payload(model, messages, stream=True)
         last_error = "unknown error"
         total_attempts = max(1, max_retries) * len(keys)
@@ -405,16 +417,22 @@ class AIManager:
                     await asyncio.sleep(backoff)
         raise AIError(last_error)
 
-    async def _request(self, model, messages, timeout_s, max_retries, session_factory=None):
+    async def _request(self, model, messages, timeout_s, max_retries, session_factory=None,
+                       allow_key_rotation=None):
+        if allow_key_rotation is None:
+            allow_key_rotation = self._key_rotation.get()
         callback = self._stream_callback.get()
         if callback is not None and session_factory is None and get_db().get_bool_setting("ai_streaming", True):
             try:
-                return await self._request_stream(model, messages, timeout_s, max_retries, callback)
+                return await self._request_stream(model, messages, timeout_s, max_retries, callback,
+                                                   allow_key_rotation=allow_key_rotation)
             except AIStreamUnsupported:
                 logger.info("Provider did not support streaming; falling back to JSON response")
-        return await self._request_standard(model, messages, timeout_s, max_retries, session_factory)
+        return await self._request_standard(model, messages, timeout_s, max_retries, session_factory,
+                                             allow_key_rotation=allow_key_rotation)
 
-    async def chat(self, user_id, prompt, model_pk=None, session_factory=None, stream_callback=None):
+    async def chat(self, user_id, prompt, model_pk=None, session_factory=None,
+                   stream_callback=None, extra_instruction=None):
         db = get_db()
         model = self.resolve_model(model_pk=model_pk, user_id=user_id)
         if not model:
@@ -422,20 +440,41 @@ class AIManager:
         timeout_s = db.get_int_setting("ai_timeout_seconds", 45)
         max_retries = db.get_int_setting("ai_max_retries", 3)
         max_turns = db.get_int_setting("ai_max_history", 8)
+        max_turns = min(max_turns, int(value_for_user(user_id, "max_history") or 0))
+        if not capability_enabled(user_id, "conversation_memory"):
+            max_turns = 0
         system_prompt = db.get_setting("ai_system_prompt") or ""
+        if extra_instruction:
+            system_prompt = (system_prompt + "\n\n" + str(extra_instruction)).strip()
         messages = self._build_messages(user_id, prompt, system_prompt, max_turns)
         started = time.monotonic()
         self._request_usage = {}
         token = self._stream_callback.set(stream_callback)
+        rotation_token = self._key_rotation.set(capability_enabled(user_id, "key_rotation"))
         try:
-            try:
-                reply = await self._request(model, messages, timeout_s, max_retries, session_factory)
-            except AIError:
-                db.log_ai_usage(user_id, model["name"], ok=False,
-                                input_type="image" if isinstance(prompt, list) else "text")
-                raise
+            candidates = [model]
+            if capability_enabled(user_id, "provider_fallback"):
+                for candidate in self.list_models(user_id=user_id):
+                    if candidate["id"] != model["id"]:
+                        candidates.append(candidate)
+            last_error = None
+            for index, candidate in enumerate(candidates):
+                self._request_usage = {}
+                try:
+                    reply = await self._request(candidate, messages, timeout_s, max_retries, session_factory)
+                    model = candidate
+                    break
+                except AIError as exc:
+                    last_error = exc
+                    db.log_ai_usage(user_id, candidate["name"], ok=False,
+                                    input_type="image" if isinstance(prompt, list) else "text")
+                    if index + 1 < len(candidates):
+                        logger.warning("AI model %s failed; trying fallback model", candidate["name"])
+            else:
+                raise last_error or AIError("all configured AI models failed")
         finally:
             self._stream_callback.reset(token)
+            self._key_rotation.reset(rotation_token)
         elapsed_ms = int((time.monotonic() - started) * 1000)
         usage = dict(self._request_usage or {})
         if not usage:

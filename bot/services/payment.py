@@ -78,9 +78,11 @@ class PaymentManager:
             quota_mode = product["quota_mode"] if "quota_mode" in product.keys() else "messages"
             token_limit = int(product["token_count"] or 0) if "token_count" in product.keys() else 0
             model_scope = product["model_scope"] if "model_scope" in product.keys() else "all"
+            feature_policy = product["feature_policy"] if "feature_policy" in product.keys() else "{}"
             db.create_subscription(
                 row["user_id"], "premium", messages, int(product["duration_days"] or 30),
                 quota_mode=quota_mode, token_limit=token_limit, model_scope=model_scope,
+                feature_policy=feature_policy,
             )
 
         sub = db.get_subscription(row["user_id"])

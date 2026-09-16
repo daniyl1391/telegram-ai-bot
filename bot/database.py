@@ -22,6 +22,7 @@ Design notes (these fix real bugs from the previous version):
   columns to databases created by the old version.
 """
 import os
+import json
 import sqlite3
 import logging
 import threading
@@ -30,7 +31,7 @@ from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 # --------------------------------------------------------------------- helpers
@@ -148,6 +149,7 @@ class Database:
                     token_limit   INTEGER NOT NULL DEFAULT 0,
                     token_used    INTEGER NOT NULL DEFAULT 0,
                     model_scope   TEXT    NOT NULL DEFAULT 'all',
+                    feature_policy TEXT NOT NULL DEFAULT '{}',
                     created_at    TEXT    NOT NULL,
                     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
                 );
@@ -174,6 +176,7 @@ class Database:
                     quota_mode    TEXT    NOT NULL DEFAULT 'messages',
                     token_count   INTEGER NOT NULL DEFAULT 0,
                     model_scope   TEXT    NOT NULL DEFAULT 'all',
+                    feature_policy TEXT NOT NULL DEFAULT '{}',
                     status         INTEGER DEFAULT 1,
                     created_at     TEXT NOT NULL
                 );
@@ -231,6 +234,16 @@ class Database:
                 );
                 CREATE INDEX IF NOT EXISTS idx_usage_user ON ai_usage(user_id, id DESC);
 
+                CREATE TABLE IF NOT EXISTS feature_overrides (
+                    scope_type TEXT NOT NULL,
+                    scope_id   INTEGER NOT NULL DEFAULT 0,
+                    feature_key TEXT NOT NULL,
+                    value      TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (scope_type, scope_id, feature_key)
+                );
+                CREATE INDEX IF NOT EXISTS idx_feature_scope ON feature_overrides(scope_type, scope_id);
+
                 CREATE TABLE IF NOT EXISTS settings (
                     key        TEXT PRIMARY KEY,
                     value      TEXT,
@@ -265,6 +278,8 @@ class Database:
             ("products", "quota_mode", "TEXT NOT NULL DEFAULT 'messages'"),
             ("products", "token_count", "INTEGER NOT NULL DEFAULT 0"),
             ("products", "model_scope", "TEXT NOT NULL DEFAULT 'all'"),
+            ("subscriptions", "feature_policy", "TEXT NOT NULL DEFAULT '{}'"),
+            ("products", "feature_policy", "TEXT NOT NULL DEFAULT '{}'"),
             ("ai_usage", "prompt_tokens", "INTEGER DEFAULT 0"),
             ("ai_usage", "completion_tokens", "INTEGER DEFAULT 0"),
             ("ai_usage", "total_tokens", "INTEGER DEFAULT 0"),
@@ -365,17 +380,19 @@ class Database:
         )
 
     def create_subscription(self, user_id, plan, message_limit, duration_days=30,
-                            quota_mode="messages", token_limit=0, model_scope="all"):
+                            quota_mode="messages", token_limit=0, model_scope="all",
+                            feature_policy=None):
         expire = iso(utcnow() + timedelta(days=int(duration_days))) if duration_days else None
         mode = str(quota_mode or "messages").strip().lower()
         if mode not in ("messages", "tokens", "both"):
             mode = "messages"
+        policy_json = feature_policy if isinstance(feature_policy, str) else json.dumps(feature_policy or {}, ensure_ascii=False)
         return self.execute(
             "INSERT INTO subscriptions (user_id, plan, message_limit, message_used, "
-            "expire_date, quota_mode, token_limit, token_used, model_scope, created_at) "
-            "VALUES (?, ?, ?, 0, ?, ?, ?, 0, ?, ?)",
+            "expire_date, quota_mode, token_limit, token_used, model_scope, feature_policy, created_at) "
+            "VALUES (?, ?, ?, 0, ?, ?, ?, 0, ?, ?, ?)",
             (user_id, plan, int(message_limit), expire, mode, int(token_limit or 0),
-             str(model_scope or "all"), iso(utcnow())),
+             str(model_scope or "all"), policy_json, iso(utcnow())),
         )
 
     def set_message_limit(self, subscription_id, limit):
@@ -520,7 +537,7 @@ class Database:
 
     def update_product(self, product_id, **fields):
         allowed = {"name", "description", "price", "duration_days", "messages_count",
-                   "quota_mode", "token_count", "model_scope", "status"}
+                   "quota_mode", "token_count", "model_scope", "feature_policy", "status"}
         sets, params = [], []
         for key, value in fields.items():
             if key in allowed:
@@ -542,6 +559,35 @@ class Database:
 
     def get_product(self, product_id):
         return self.query_one("SELECT * FROM products WHERE id = ?", (product_id,))
+
+    def set_product_feature_policy(self, product_id, policy):
+        self.execute("UPDATE products SET feature_policy = ? WHERE id = ?",
+                     (json.dumps(policy or {}, ensure_ascii=False), product_id))
+
+    def set_subscription_feature_policy(self, subscription_id, policy):
+        self.execute("UPDATE subscriptions SET feature_policy = ? WHERE id = ?",
+                     (json.dumps(policy or {}, ensure_ascii=False), subscription_id))
+
+    def get_feature_override(self, scope_type, scope_id, feature_key):
+        row = self.query_one(
+            "SELECT value FROM feature_overrides WHERE scope_type = ? AND scope_id = ? AND feature_key = ?",
+            (scope_type, int(scope_id or 0), feature_key),
+        )
+        return (row or {}).get("value")
+
+    def set_feature_override(self, scope_type, scope_id, feature_key, value):
+        self.execute(
+            "INSERT INTO feature_overrides(scope_type, scope_id, feature_key, value, updated_at) "
+            "VALUES (?, ?, ?, ?, ?) ON CONFLICT(scope_type, scope_id, feature_key) DO UPDATE SET "
+            "value = excluded.value, updated_at = excluded.updated_at",
+            (scope_type, int(scope_id or 0), feature_key, str(value), iso(utcnow())),
+        )
+
+    def reset_feature_override(self, scope_type, scope_id, feature_key):
+        self.execute(
+            "DELETE FROM feature_overrides WHERE scope_type = ? AND scope_id = ? AND feature_key = ?",
+            (scope_type, int(scope_id or 0), feature_key),
+        )
 
     # -------------------------------------------------------------- payments
     def create_payment(self, user_id, product_id, amount, method):

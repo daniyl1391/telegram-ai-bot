@@ -26,6 +26,7 @@ from bot.handlers.common import (
 from bot.handlers.support import render_ticket
 from bot import keyboards as kb
 from bot.admin import panel as admin_ops
+from bot import capabilities
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +116,84 @@ async def admin_callback(update, context):
     return await handler(update, context, lang, rest)
 
 
+async def _capability_screen(update, context, lang, scope, scope_id, page):
+    db = get_db()
+    values = {cap.key: capabilities.scope_value(scope, scope_id, cap.key)
+              for cap in capabilities.FEATURES}
+    pages = max(1, (len(capabilities.FEATURES) + 9) // 10)
+    scope_label = {"global": "Global", "product": "Product #%s" % scope_id,
+                   "user": "User #%s" % scope_id}[scope]
+    text = t("capabilities_title", lang, scope=scope_label,
+             page=int(page) + 1, pages=pages)
+    return await safe_edit(update.callback_query, text,
+                           kb.capability_menu(lang, scope, scope_id, int(page), values))
+
+
+async def _features(update, context, lang, rest):
+    await update.callback_query.answer()
+    return await _capability_screen(update, context, lang, "global", 0,
+                                     _int(rest[0] if rest else 0))
+
+
+async def _ftoggle(update, context, lang, rest):
+    key = rest[0] if rest else ""
+    page = _int(rest[1] if len(rest) > 1 else 0)
+    if key not in capabilities.FEATURE_MAP:
+        await update.callback_query.answer(t("unknown_action", lang), show_alert=True)
+        return None
+    current = capabilities.global_value(key)
+    capabilities.set_global(key, capabilities.cycle_value(key, current))
+    await update.callback_query.answer(t("capability_saved", lang))
+    return await _capability_screen(update, context, lang, "global", 0, page)
+
+
+async def _pfeatures(update, context, lang, rest):
+    product_id = _int(rest[0] if rest else 0)
+    if not get_db().get_product(product_id):
+        await update.callback_query.answer(t("unknown_action", lang), show_alert=True)
+        return None
+    await update.callback_query.answer()
+    return await _capability_screen(update, context, lang, "product", product_id,
+                                     _int(rest[1] if len(rest) > 1 else 0))
+
+
+async def _pftoggle(update, context, lang, rest):
+    product_id = _int(rest[0] if rest else 0)
+    key = rest[1] if len(rest) > 1 else ""
+    page = _int(rest[2] if len(rest) > 2 else 0)
+    if key not in capabilities.FEATURE_MAP or not get_db().get_product(product_id):
+        await update.callback_query.answer(t("unknown_action", lang), show_alert=True)
+        return None
+    current = capabilities.product_value(product_id, key)
+    capabilities.set_product(product_id, key, capabilities.cycle_value(key, current))
+    await update.callback_query.answer(t("capability_saved", lang))
+    return await _capability_screen(update, context, lang, "product", product_id, page)
+
+
+async def _ufeatures(update, context, lang, rest):
+    user_id = _int(rest[0] if rest else 0)
+    if not get_db().get_user(user_id):
+        await update.callback_query.answer(t("admin_user_not_found", lang), show_alert=True)
+        return None
+    subscription_manager.ensure_subscription(user_id)
+    await update.callback_query.answer()
+    return await _capability_screen(update, context, lang, "user", user_id,
+                                     _int(rest[1] if len(rest) > 1 else 0))
+
+
+async def _uftoggle(update, context, lang, rest):
+    user_id = _int(rest[0] if rest else 0)
+    key = rest[1] if len(rest) > 1 else ""
+    page = _int(rest[2] if len(rest) > 2 else 0)
+    if key not in capabilities.FEATURE_MAP or not get_db().get_user(user_id):
+        await update.callback_query.answer(t("unknown_action", lang), show_alert=True)
+        return None
+    current = capabilities.user_value(user_id, key)
+    capabilities.set_user(user_id, key, capabilities.cycle_value(key, current))
+    await update.callback_query.answer(t("capability_saved", lang))
+    return await _capability_screen(update, context, lang, "user", user_id, page)
+
+
 # ----------------------------------------------------------------------- home
 async def _home(update, context, lang, rest):
     await update.callback_query.answer()
@@ -194,22 +273,79 @@ async def _usearch(update, context, lang, rest):
 
 
 async def _quota(update, context, lang, rest):
-    await update.callback_query.answer()
+    query = update.callback_query
     user_id = _int(rest[0] if rest else 0)
-    set_flow(context, "admin_quota", user_id=user_id)
-    return await safe_edit(update.callback_query, t("admin_ask_quota", lang),
-                           kb.cancel_only(lang))
+    if len(rest) == 1:
+        await query.answer()
+        set_flow(context, "admin_quota", user_id=user_id)
+        return await safe_edit(
+            query, t("quota_value_title", lang),
+            kb.admin_quota_values_menu(
+                lang, "adm:quota:%s" % user_id,
+                (10, 50, 100, 500, 1000, 5000),
+                "adm:setquota:%s" % user_id,
+                back="adm:user:%s" % user_id,
+            ),
+        )
+    value = rest[1] if len(rest) > 1 else "custom"
+    if value == "custom":
+        await query.answer()
+        set_flow(context, "admin_quota", user_id=user_id)
+        return await safe_edit(query, t("admin_ask_quota", lang), kb.cancel_only(lang))
+    try:
+        subscription_manager.set_quota(user_id, validate_int(value, 0, 10_000_000))
+    except ValidationError as exc:
+        await query.answer(exc.message(lang), show_alert=True)
+        return None
+    await query.answer(t("admin_user_updated", lang))
+    return await _user(update, context, lang, [user_id])
 
 
 async def _policy(update, context, lang, rest):
+    query = update.callback_query
     user_id = _int(rest[0] if rest else 0)
-    if not get_db().get_user(user_id):
-        await update.callback_query.answer(t("admin_user_not_found", lang), show_alert=True)
+    db = get_db()
+    if not db.get_user(user_id):
+        await query.answer(t("admin_user_not_found", lang), show_alert=True)
         return None
-    await update.callback_query.answer()
-    set_flow(context, "admin_user_policy", step="mode", user_id=user_id)
-    return await safe_edit(update.callback_query, t("admin_ask_quota_mode", lang),
-                           kb.cancel_only(lang))
+    if len(rest) == 1:
+        await query.answer()
+        return await safe_edit(query, t("admin_ask_quota_mode", lang),
+                               kb.admin_user_policy_mode_menu(lang, user_id))
+
+    action = rest[1] if len(rest) > 1 else ""
+    value = rest[2] if len(rest) > 2 else ""
+    if action == "mode" and value in ("messages", "tokens", "both"):
+        subscription_manager.set_policy(user_id, quota_mode=value)
+        await query.answer()
+        return await safe_edit(query, t("admin_ask_token_limit", lang),
+                               kb.admin_user_policy_tokens_menu(lang, user_id))
+    if action == "tokens":
+        if value == "custom":
+            await query.answer()
+            set_flow(context, "admin_user_policy", step="tokens", user_id=user_id)
+            return await safe_edit(query, t("admin_ask_token_limit", lang), kb.cancel_only(lang))
+        try:
+            subscription_manager.set_policy(user_id, token_limit=validate_int(value, 0, 1_000_000_000))
+        except ValidationError as exc:
+            await query.answer(exc.message(lang), show_alert=True)
+            return None
+        await query.answer()
+        return await safe_edit(query, t("admin_ask_model_scope", lang),
+                               kb.admin_model_scope_menu(
+                                   lang, user_id, db.get_ai_models(),
+                                   "adm:policy:%s:scope" % user_id))
+    if action == "scope":
+        if value == "custom":
+            await query.answer()
+            set_flow(context, "admin_user_policy", step="scope", user_id=user_id)
+            return await safe_edit(query, t("admin_ask_model_scope", lang), kb.cancel_only(lang))
+        scope = "all" if value == "all" else value
+        subscription_manager.set_policy(user_id, model_scope=scope)
+        await query.answer(t("policy_saved", lang))
+        return await _user(update, context, lang, [user_id])
+    await query.answer(t("unknown_action", lang), show_alert=True)
+    return None
 
 
 async def _ban(update, context, lang, rest):
@@ -252,6 +388,7 @@ async def _grantp(update, context, lang, rest):
         quota_mode=product.get("quota_mode", "messages"),
         token_limit=_int(product.get("token_count"), 0),
         model_scope=product.get("model_scope", "all"),
+        feature_policy=product.get("feature_policy") or "{}",
     )
     await query.answer(t("admin_user_updated", lang))
     try:
@@ -431,9 +568,51 @@ async def _pedit(update, context, lang, rest):
     query = update.callback_query
     field = rest[0] if rest else ""
     product_id = _int(rest[1] if len(rest) > 1 else 0)
-    if field not in _PRODUCT_FIELD_PROMPTS or not get_db().get_product(product_id):
+    db = get_db()
+    product = db.get_product(product_id)
+    if field not in _PRODUCT_FIELD_PROMPTS or not product:
         await query.answer(t("unknown_action", lang), show_alert=True)
         return None
+
+    # Numeric/policy fields open button menus first; their final callback carries
+    # the selected value and never requires the admin to type it.
+    if field == "quota_mode":
+        if len(rest) == 2:
+            await query.answer()
+            return await safe_edit(query, t("admin_ask_quota_mode", lang),
+                                   kb.admin_product_quota_mode_menu(lang, product_id))
+        value = rest[2] if len(rest) > 2 else ""
+        if value in ("messages", "tokens", "both"):
+            db.update_product(product_id, quota_mode=value)
+            await query.answer(t("admin_setting_saved", lang))
+            return await _product(update, context, lang, [product_id])
+    if field == "token_count":
+        if len(rest) == 2:
+            await query.answer()
+            return await safe_edit(query, t("quota_value_title", lang),
+                                   kb.admin_product_token_menu(lang, product_id))
+        value = rest[2] if len(rest) > 2 else ""
+        if value == "custom":
+            await query.answer()
+            set_flow(context, "admin_pedit", step=field, product_id=product_id)
+            return await safe_edit(query, t("admin_ask_number", lang), kb.cancel_only(lang))
+        db.update_product(product_id, token_count=validate_int(value, 0, 1_000_000_000))
+        await query.answer(t("admin_setting_saved", lang))
+        return await _product(update, context, lang, [product_id])
+    if field == "model_scope":
+        if len(rest) == 2:
+            await query.answer()
+            return await safe_edit(query, t("admin_ask_model_scope", lang),
+                                   kb.admin_product_scope_menu(lang, product_id, db.get_ai_models()))
+        value = rest[2] if len(rest) > 2 else ""
+        if value == "custom":
+            await query.answer()
+            set_flow(context, "admin_pedit", step=field, product_id=product_id)
+            return await safe_edit(query, t("admin_ask_model_scope", lang), kb.cancel_only(lang))
+        db.update_product(product_id, model_scope="all" if value == "all" else value)
+        await query.answer(t("admin_setting_saved", lang))
+        return await _product(update, context, lang, [product_id])
+
     await query.answer()
     set_flow(context, "admin_pedit", step=field, product_id=product_id)
     return await safe_edit(query, t(_PRODUCT_FIELD_PROMPTS[field], lang), kb.cancel_only(lang))
@@ -625,8 +804,62 @@ async def _tkclose(update, context, lang, rest):
 
 # -------------------------------------------------------------------- settings
 async def _settings(update, context, lang, rest):
-    await update.callback_query.answer()
+    query = update.callback_query
+    await query.answer()
     db = get_db()
+    if rest:
+        action = rest[0]
+        value = rest[1] if len(rest) > 1 else ""
+        if action == "qmode":
+            if not value:
+                return await safe_edit(query, t("admin_ask_quota_mode", lang),
+                                       kb.admin_quota_mode_menu(lang, "adm:settings:qmode", back="adm:settings"))
+            if value == "custom":
+                set_flow(context, "admin_setting", step="default_quota_mode")
+                return await safe_edit(query, t("admin_ask_text", lang), kb.cancel_only(lang))
+            if value in ("messages", "tokens", "both"):
+                db.set_setting("default_quota_mode", value)
+                return await safe_edit(query, t("admin_setting_saved", lang),
+                                       kb.admin_settings_menu(lang,
+                                                              db.get_bool_setting("shop_enabled", True),
+                                                              db.get_bool_setting("support_enabled", True),
+                                                              db.get_bool_setting("ai_streaming", True)))
+        if action == "qmessages":
+            if value:
+                db.set_setting("free_message_limit", validate_int(value, 1, 1_000_000))
+                return await safe_edit(query, t("admin_setting_saved", lang),
+                                       kb.admin_settings_menu(lang,
+                                                              db.get_bool_setting("shop_enabled", True),
+                                                              db.get_bool_setting("support_enabled", True),
+                                                              db.get_bool_setting("ai_streaming", True)))
+            return await safe_edit(query, t("quota_value_title", lang),
+                                   kb.admin_quota_values_menu(
+                                       lang, "adm:settings:qmessages", (10, 50, 100, 500, 1000, 5000),
+                                       "adm:set:free_message_limit", back="adm:settings"))
+        if action == "qtokens":
+            if value:
+                db.set_setting("free_token_limit", validate_int(value, 0, 1_000_000_000))
+                return await safe_edit(query, t("admin_setting_saved", lang),
+                                       kb.admin_settings_menu(lang,
+                                                              db.get_bool_setting("shop_enabled", True),
+                                                              db.get_bool_setting("support_enabled", True),
+                                                              db.get_bool_setting("ai_streaming", True)))
+            return await safe_edit(query, t("quota_value_title", lang),
+                                   kb.admin_quota_values_menu(
+                                       lang, "adm:settings:qtokens", (1000, 5000, 10000, 50000, 100000, 1000000),
+                                       "adm:set:free_token_limit", back="adm:settings"))
+        if action == "qscope":
+            if value:
+                db.set_setting("default_model_scope", "all" if value == "all" else value)
+                return await safe_edit(query, t("admin_setting_saved", lang),
+                                       kb.admin_settings_menu(lang,
+                                                              db.get_bool_setting("shop_enabled", True),
+                                                              db.get_bool_setting("support_enabled", True),
+                                                              db.get_bool_setting("ai_streaming", True)))
+            return await safe_edit(query, t("admin_ask_model_scope", lang),
+                                   kb.admin_model_scope_menu(lang, 0, db.get_ai_models(),
+                                                             "adm:settings:qscope", back="adm:settings"))
+
     text = t("admin_settings_title", lang,
              free_limit=db.get_int_setting("free_message_limit", 10),
              free_tokens=db.get_int_setting("free_token_limit", 100000),
@@ -638,7 +871,7 @@ async def _settings(update, context, lang, rest):
              shop=t("on" if db.get_bool_setting("shop_enabled", True) else "off", lang),
              support=t("on" if db.get_bool_setting("support_enabled", True) else "off", lang),
              history=db.get_int_setting("ai_max_history", 8))
-    return await safe_edit(update.callback_query, text,
+    return await safe_edit(query, text,
                            kb.admin_settings_menu(lang,
                                                   db.get_bool_setting("shop_enabled", True),
                                                   db.get_bool_setting("support_enabled", True),
@@ -678,6 +911,9 @@ async def _bcast(update, context, lang, rest):
 
 _ROUTES = {
     "home": _home, "stats": _stats,
+    "features": _features, "ftoggle": _ftoggle,
+    "pfeatures": _pfeatures, "pftoggle": _pftoggle,
+    "ufeatures": _ufeatures, "uftoggle": _uftoggle,
     "users": _users, "user": _user, "usearch": _usearch, "quota": _quota, "policy": _policy,
     "ban": _ban, "grant": _grant, "grantp": _grantp, "dm": _dm,
     "models": _models, "model": _model, "addmodel": _addmodel, "medit": _medit,

@@ -6,6 +6,7 @@ tests.py asserts that fact, so a dead button cannot ship again.
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from bot.i18n import t, LANGUAGES
+from bot.capabilities import FEATURES, button_text
 
 
 def _rows(*rows):
@@ -21,6 +22,10 @@ def language_menu(prefix="lang"):
 
 def main_menu(lang, is_admin_user=False, shop_on=True, support_on=True):
     rows = [[InlineKeyboardButton(t("btn_ai_chat", lang), callback_data="ai:open")]]
+    rows.append([
+        InlineKeyboardButton(t("btn_tools", lang), callback_data="tools:menu"),
+        InlineKeyboardButton(t("btn_usage", lang), callback_data="usage:view"),
+    ])
     if shop_on:
         rows.append([InlineKeyboardButton(t("btn_shop", lang), callback_data="shop:list")])
     row = [InlineKeyboardButton(t("btn_account", lang), callback_data="acct:view")]
@@ -39,10 +44,18 @@ def back_to_main(lang):
     )
 
 
-def ai_menu(lang, has_multiple_models):
+def ai_menu(lang, has_multiple_models, allow_model_selection=True, allow_tools=True):
     rows = []
-    if has_multiple_models:
+    if has_multiple_models and allow_model_selection:
         rows.append([InlineKeyboardButton(t("btn_choose_model", lang), callback_data="ai:models")])
+    if allow_tools:
+        rows.append([
+            InlineKeyboardButton(t("btn_tools", lang), callback_data="tools:menu"),
+            InlineKeyboardButton(t("btn_style", lang), callback_data="ai:style"),
+        ])
+    else:
+        rows.append([InlineKeyboardButton(t("btn_style", lang), callback_data="ai:style")])
+    rows.append([InlineKeyboardButton(t("btn_usage", lang), callback_data="usage:view")])
     rows.append([InlineKeyboardButton(t("btn_clear_history", lang), callback_data="ai:clear")])
     rows.append([InlineKeyboardButton(t("btn_main_menu", lang), callback_data="nav:main")])
     return InlineKeyboardMarkup(rows)
@@ -123,10 +136,178 @@ def ticket_view_menu(lang, ticket_id, is_admin_view=False):
 
 
 def account_menu(lang, shop_on=True):
-    rows = []
+    rows = [[InlineKeyboardButton(t("btn_usage", lang), callback_data="usage:view")]]
     if shop_on:
         rows.append([InlineKeyboardButton(t("btn_shop", lang), callback_data="shop:list")])
     rows.append([InlineKeyboardButton(t("btn_main_menu", lang), callback_data="nav:main")])
+    return InlineKeyboardMarkup(rows)
+
+
+def quick_tools_menu(lang, page=1):
+    pages = {
+        1: ("summarize", "translate", "rewrite", "code", "receipt", "deep", "search"),
+        2: ("research", "factcheck", "compare", "email", "resume", "marketing", "url"),
+        3: ("json", "bullets", "table", "calculator", "datetime", "export"),
+    }
+    keys = pages.get(int(page or 1), pages[1])
+    rows = []
+    for index in range(0, len(keys), 2):
+        row = []
+        for key in keys[index:index + 2]:
+            row.append(InlineKeyboardButton(t("tool_" + key, lang), callback_data="tools:use:" + key))
+        rows.append(row)
+    nav = []
+    if page > 1:
+        nav.append(InlineKeyboardButton(t("btn_prev", lang), callback_data="tools:page:%s" % (page - 1)))
+    if page < 3:
+        nav.append(InlineKeyboardButton(t("btn_next", lang), callback_data="tools:page:%s" % (page + 1)))
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton(t("btn_back", lang), callback_data="ai:open")])
+    return InlineKeyboardMarkup(rows)
+
+
+def response_style_menu(lang, active=None):
+    styles = ("concise", "balanced", "detailed", "formal")
+    rows = []
+    for style in styles:
+        mark = "✅ " if style == active else ""
+        rows.append([InlineKeyboardButton(mark + t("style_" + style, lang),
+                                          callback_data="ai:style:%s" % style)])
+    rows.append([InlineKeyboardButton(t("btn_back", lang), callback_data="ai:open")])
+    return InlineKeyboardMarkup(rows)
+
+
+def usage_menu(lang):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(t("btn_shop", lang), callback_data="shop:list")],
+        [InlineKeyboardButton(t("btn_ai_chat", lang), callback_data="ai:open")],
+        [InlineKeyboardButton(t("btn_main_menu", lang), callback_data="nav:main")],
+    ])
+
+
+def admin_quota_mode_menu(lang, prefix, back="adm:home"):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(t("btn_quota_messages", lang), callback_data=prefix + ":messages")],
+        [InlineKeyboardButton(t("btn_quota_tokens", lang), callback_data=prefix + ":tokens")],
+        [InlineKeyboardButton(t("btn_quota_both", lang), callback_data=prefix + ":both")],
+        [InlineKeyboardButton(t("btn_custom_value", lang), callback_data=prefix + ":custom")],
+        [InlineKeyboardButton(t("btn_back", lang), callback_data=back)],
+    ])
+
+
+def admin_quota_values_menu(lang, prefix, values, custom_callback, back="adm:settings"):
+    rows = []
+    row = []
+    for value in values:
+        row.append(InlineKeyboardButton("%s" % format(value, ","), callback_data=prefix + ":%s" % value))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton(t("btn_custom_value", lang), callback_data=custom_callback)])
+    rows.append([InlineKeyboardButton(t("btn_back", lang), callback_data=back)])
+    return InlineKeyboardMarkup(rows)
+
+
+def admin_user_policy_mode_menu(lang, user_id):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(t("btn_quota_messages", lang), callback_data="adm:policy:%s:mode:messages" % user_id)],
+        [InlineKeyboardButton(t("btn_quota_tokens", lang), callback_data="adm:policy:%s:mode:tokens" % user_id)],
+        [InlineKeyboardButton(t("btn_quota_both", lang), callback_data="adm:policy:%s:mode:both" % user_id)],
+        [InlineKeyboardButton(t("btn_back", lang), callback_data="adm:user:%s" % user_id)],
+    ])
+
+
+def admin_user_policy_tokens_menu(lang, user_id):
+    values = (1000, 5000, 10000, 50000, 100000, 1000000)
+    rows = []
+    row = []
+    for value in values:
+        row.append(InlineKeyboardButton(format(value, ","), callback_data="adm:policy:%s:tokens:%s" % (user_id, value)))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton(t("btn_custom_value", lang), callback_data="adm:policy:%s:tokens:custom" % user_id)])
+    rows.append([InlineKeyboardButton(t("btn_back", lang), callback_data="adm:policy:%s" % user_id)])
+    return InlineKeyboardMarkup(rows)
+
+
+def admin_model_scope_menu(lang, user_id, models, callback_prefix, back=None):
+    rows = [[InlineKeyboardButton(t("btn_all_models", lang), callback_data=callback_prefix + ":all")]]
+    for model in models:
+        rows.append([InlineKeyboardButton("🤖 " + model["name"],
+                                          callback_data=callback_prefix + ":" + str(model["id"]))])
+    rows.append([InlineKeyboardButton(t("btn_back", lang), callback_data=back or "adm:user:%s" % user_id)])
+    return InlineKeyboardMarkup(rows)
+
+
+def admin_product_quota_mode_menu(lang, product_id):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(t("btn_quota_messages", lang), callback_data="adm:pedit:quota_mode:%s:messages" % product_id)],
+        [InlineKeyboardButton(t("btn_quota_tokens", lang), callback_data="adm:pedit:quota_mode:%s:tokens" % product_id)],
+        [InlineKeyboardButton(t("btn_quota_both", lang), callback_data="adm:pedit:quota_mode:%s:both" % product_id)],
+        [InlineKeyboardButton(t("btn_back", lang), callback_data="adm:product:%s" % product_id)],
+    ])
+
+
+def admin_product_token_menu(lang, product_id):
+    values = (1000, 5000, 10000, 50000, 100000, 1000000)
+    rows = []
+    row = []
+    for value in values:
+        row.append(InlineKeyboardButton(format(value, ","), callback_data="adm:pedit:token_count:%s:%s" % (product_id, value)))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton(t("btn_custom_value", lang), callback_data="adm:pedit:token_count:%s:custom" % product_id)])
+    rows.append([InlineKeyboardButton(t("btn_back", lang), callback_data="adm:product:%s" % product_id)])
+    return InlineKeyboardMarkup(rows)
+
+
+def admin_product_scope_menu(lang, product_id, models):
+    rows = [[InlineKeyboardButton(t("btn_all_models", lang), callback_data="adm:pedit:model_scope:%s:all" % product_id)]]
+    for model in models:
+        rows.append([InlineKeyboardButton("🤖 " + model["name"],
+                                          callback_data="adm:pedit:model_scope:%s:%s" % (product_id, model["id"]))])
+    rows.append([InlineKeyboardButton(t("btn_custom_value", lang), callback_data="adm:pedit:model_scope:%s:custom" % product_id)])
+    rows.append([InlineKeyboardButton(t("btn_back", lang), callback_data="adm:product:%s" % product_id)])
+    return InlineKeyboardMarkup(rows)
+
+
+def capability_menu(lang, scope, scope_id, page, values):
+    page = max(0, int(page or 0))
+    page_size = 10
+    pages = max(1, (len(FEATURES) + page_size - 1) // page_size)
+    page = min(page, pages - 1)
+    start = page * page_size
+    rows = []
+    for cap in FEATURES[start:start + page_size]:
+        value = values.get(cap.key, cap.default)
+        if scope == "global":
+            callback = "adm:ftoggle:%s:%s" % (cap.key, page)
+        elif scope == "product":
+            callback = "adm:pftoggle:%s:%s:%s" % (scope_id, cap.key, page)
+        else:
+            callback = "adm:uftoggle:%s:%s:%s" % (scope_id, cap.key, page)
+        rows.append([InlineKeyboardButton(button_text(cap.key, value, lang), callback_data=callback)])
+    nav = []
+    prefix = {"global": "adm:features", "product": "adm:pfeatures:%s" % scope_id,
+              "user": "adm:ufeatures:%s" % scope_id}[scope]
+    if page > 0:
+        nav.append(InlineKeyboardButton(t("btn_prev", lang), callback_data=prefix + ":%s" % (page - 1)))
+    if page < pages - 1:
+        nav.append(InlineKeyboardButton(t("btn_next", lang), callback_data=prefix + ":%s" % (page + 1)))
+    if nav:
+        rows.append(nav)
+    back = {"global": "adm:home", "product": "adm:product:%s" % scope_id,
+            "user": "adm:user:%s" % scope_id}[scope]
+    rows.append([InlineKeyboardButton(t("btn_back", lang), callback_data=back)])
     return InlineKeyboardMarkup(rows)
 
 
@@ -140,7 +321,8 @@ def admin_home(lang):
         [InlineKeyboardButton(t("btn_admin_tickets", lang), callback_data="adm:tickets"),
          InlineKeyboardButton(t("btn_admin_stats", lang), callback_data="adm:stats")],
         [InlineKeyboardButton(t("btn_admin_settings", lang), callback_data="adm:settings"),
-         InlineKeyboardButton(t("btn_admin_broadcast", lang), callback_data="adm:bcast")],
+         InlineKeyboardButton(t("btn_admin_features", lang), callback_data="adm:features:0")],
+        [InlineKeyboardButton(t("btn_admin_broadcast", lang), callback_data="adm:bcast")],
         [InlineKeyboardButton(t("btn_main_menu", lang), callback_data="nav:main")],
     ])
 
@@ -171,7 +353,8 @@ def admin_user_menu(lang, user_id, banned):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(t("btn_set_quota", lang), callback_data="adm:quota:%s" % user_id),
          InlineKeyboardButton(t("btn_grant", lang), callback_data="adm:grant:%s" % user_id)],
-        [InlineKeyboardButton(t("btn_set_policy", lang), callback_data="adm:policy:%s" % user_id)],
+        [InlineKeyboardButton(t("btn_set_policy", lang), callback_data="adm:policy:%s" % user_id),
+         InlineKeyboardButton(t("btn_user_features", lang), callback_data="adm:ufeatures:%s:0" % user_id)],
         [InlineKeyboardButton(t("btn_message_user", lang), callback_data="adm:dm:%s" % user_id)],
         [InlineKeyboardButton(
             t("btn_unban", lang) if banned else t("btn_ban", lang),
@@ -222,6 +405,7 @@ def admin_product_menu(lang, product_id):
         [InlineKeyboardButton(t("btn_set_quota_mode", lang), callback_data="adm:pedit:quota_mode:%s" % product_id),
          InlineKeyboardButton(t("btn_set_product_tokens", lang), callback_data="adm:pedit:token_count:%s" % product_id)],
         [InlineKeyboardButton(t("btn_set_model_scope", lang), callback_data="adm:pedit:model_scope:%s" % product_id)],
+        [InlineKeyboardButton(t("btn_product_features", lang), callback_data="adm:pfeatures:%s:0" % product_id)],
         [InlineKeyboardButton(t("btn_toggle_status", lang), callback_data="adm:ptoggle:%s" % product_id),
          InlineKeyboardButton(t("btn_delete", lang), callback_data="adm:pdel:%s" % product_id)],
         [InlineKeyboardButton(t("btn_back", lang), callback_data="adm:products")],
@@ -269,10 +453,10 @@ def admin_tickets_menu(lang, tickets):
 
 def admin_settings_menu(lang, shop_on, support_on, streaming_on=True):
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(t("btn_set_free_limit", lang), callback_data="adm:set:free_message_limit"),
-         InlineKeyboardButton(t("btn_set_free_tokens", lang), callback_data="adm:set:free_token_limit")],
-        [InlineKeyboardButton(t("btn_set_quota_mode", lang), callback_data="adm:set:default_quota_mode"),
-         InlineKeyboardButton(t("btn_set_model_scope", lang), callback_data="adm:set:default_model_scope")],
+        [InlineKeyboardButton(t("btn_set_free_limit", lang), callback_data="adm:settings:qmessages"),
+         InlineKeyboardButton(t("btn_set_free_tokens", lang), callback_data="adm:settings:qtokens")],
+        [InlineKeyboardButton(t("btn_set_quota_mode", lang), callback_data="adm:settings:qmode"),
+         InlineKeyboardButton(t("btn_set_model_scope", lang), callback_data="adm:settings:qscope")],
         [InlineKeyboardButton(t("btn_set_free_days", lang), callback_data="adm:set:free_period_days")],
         [InlineKeyboardButton(t("btn_set_rate_limit", lang), callback_data="adm:set:rate_limit_messages"),
          InlineKeyboardButton(t("btn_set_history", lang), callback_data="adm:set:ai_max_history")],
