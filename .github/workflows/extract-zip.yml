@@ -1,4 +1,4 @@
-name: Update Project From ZIP
+name: Safe Update From ZIP Keep Data
 
 on:
   workflow_dispatch:
@@ -6,8 +6,10 @@ on:
 permissions:
   contents: write
 
+
 jobs:
   update:
+
     runs-on: ubuntu-latest
 
     steps:
@@ -17,65 +19,99 @@ jobs:
       with:
         fetch-depth: 0
 
+
     - name: Git Config
       run: |
         git config user.name "github-actions"
         git config user.email "actions@github.com"
 
-    - name: Clean Old Project
+
+    - name: Backup User Data
       run: |
-        find . -mindepth 1 \
-        ! -path "./.git" \
-        ! -path "./.git/*" \
-        ! -path "./.github" \
-        ! -path "./.github/*" \
-        ! -name "telegram_ai_bot_fixed (1).zip" \
-        -exec rm -rf {} +
+        mkdir -p backup
 
-        echo "Old files deleted"
+        find . \
+        \( \
+        -name "*.db" \
+        -o -name "*.sqlite" \
+        -o -name "*.sqlite3" \
+        -o -path "./data" \
+        -o -path "./database" \
+        -o -name ".env" \
+        \) \
+        -exec cp -r {} backup/ \; || true
 
-    - name: Wait
-      run: |
-        sleep 13
 
-    - name: Extract ZIP
-      run: |
-        mkdir extracted
+        echo "Data backup completed"
 
-        unzip -o "telegram_ai_bot_fixed (1).zip" -d extracted
 
-        echo "ZIP extracted"
-
-        find extracted -maxdepth 3 -type f | head -100
-
-    - name: Copy Project To Root
+    - name: Extract New ZIP
       run: |
 
-        PROJECT=$(find extracted -name "main.py" | head -1 | xargs dirname)
+        mkdir new_project
 
-        echo "Project found:"
+        unzip -o "telegram_ai_bot_upgraded.zip" -d new_project
+
+
+        echo "Extracted:"
+        find new_project -maxdepth 3 -type f | head -100
+
+
+
+    - name: Replace Code Only
+      run: |
+
+        PROJECT=$(find new_project -name "main.py" | head -1 | xargs dirname)
+
+        echo "New project:"
         echo $PROJECT
 
-        cp -r "$PROJECT"/* .
-        cp -r "$PROJECT"/.[!.]* . 2>/dev/null || true
+
+        rsync -av \
+        --exclude "*.db" \
+        --exclude "*.sqlite" \
+        --exclude "*.sqlite3" \
+        --exclude "data/" \
+        --exclude "database/" \
+        --exclude ".env" \
+        "$PROJECT"/ ./
 
 
-    - name: Remove Extract Folder
+    - name: Restore Data
       run: |
-        rm -rf extracted
 
-    - name: Check Files
+        cp -rf backup/* . 2>/dev/null || true
+
+
+        echo "Old user data restored"
+
+
+
+    - name: Remove Temp
       run: |
-        echo "Final structure:"
+
+        rm -rf new_project
+        rm -rf backup
+
+
+    - name: Check
+      run: |
+
+        echo "Final files:"
         ls -la
-        echo "---"
-        find . -maxdepth 2 -type f
+
+
+        echo "Database files:"
+        find . \
+        \( -name "*.db" -o -name "*.sqlite" \)
+
 
 
     - name: Commit Update
       run: |
+
         git add -A
 
-        git commit -m "Update project from telegram_ai_bot_fixed ZIP" || echo "No changes"
+        git commit -m "Safe update keep users data" || echo "No changes"
 
-        git push origin main --force
+        git push origin main
