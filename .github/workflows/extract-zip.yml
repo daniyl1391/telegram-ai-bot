@@ -50,7 +50,7 @@ jobs:
 
         mkdir new_project
 
-        unzip -o "telegram_ai_bot_upgraded.zip" -d new_project
+        unzip -o "telegram_ai_bot_upgraded_v4.zip" -d new_project
 
 
         echo "Extracted:"
