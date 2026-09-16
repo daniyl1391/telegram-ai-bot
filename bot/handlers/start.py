@@ -67,6 +67,8 @@ async def account(update, context):
         used=int(sub.get("message_used") or 0) if sub else 0,
         limit=int(sub.get("message_limit") or 0) if sub else 0,
         remaining=subscription_manager.remaining(user_id),
+        token_used=int(sub.get("token_used") or 0) if sub else 0,
+        token_limit=int(sub.get("token_limit") or 0) if sub else 0,
         expire=expire.strftime("%Y-%m-%d %H:%M UTC") if expire else t("never", lang),
     )
     if state == "expired":

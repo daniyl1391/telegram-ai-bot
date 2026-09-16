@@ -56,10 +56,12 @@ STRINGS = {
     "account_title": {
         "fa": "👤 <b>حساب من</b>\n\n▫️ شناسه: <code>{user_id}</code>\n"
               "▫️ اشتراک: <b>{plan}</b>\n▫️ مصرف: <b>{used}</b> از <b>{limit}</b>\n"
-              "▫️ باقی‌مانده: <b>{remaining}</b>\n▫️ انقضا: <b>{expire}</b>",
+              "▫️ باقی‌مانده: <b>{remaining}</b>\n▫️ توکن: <b>{token_used}</b> از <b>{token_limit}</b>\n"
+              "▫️ انقضا: <b>{expire}</b>",
         "en": "👤 <b>My Account</b>\n\n▫️ ID: <code>{user_id}</code>\n"
               "▫️ Plan: <b>{plan}</b>\n▫️ Used: <b>{used}</b> of <b>{limit}</b>\n"
-              "▫️ Remaining: <b>{remaining}</b>\n▫️ Expires: <b>{expire}</b>",
+              "▫️ Remaining: <b>{remaining}</b>\n▫️ Tokens: <b>{token_used}</b> of <b>{token_limit}</b>\n"
+              "▫️ Expires: <b>{expire}</b>",
     },
     "never": {"fa": "بدون انقضا", "en": "No expiry"},
     "plan_free": {"fa": "رایگان", "en": "Free"},
@@ -74,7 +76,16 @@ STRINGS = {
               "▫️ Messages left: <b>{remaining}</b>\n\n"
               "Type your question and send it ✍️",
     },
-    "ai_thinking": {"fa": "⏳ در حال فکر کردن...", "en": "⏳ Thinking..."},
+    "ai_thinking": {"fa": "⏳ در حال فکر کردن و نوشتن...", "en": "⏳ Thinking and writing..."},
+    "ai_tokens": {"fa": "توکن", "en": "tokens"},
+    "attachment_default_prompt": {
+        "fa": "این فایل یا تصویر را دقیق بررسی کن و نکات مهم، اعداد و نتیجه را توضیح بده.",
+        "en": "Analyze this file or image carefully and explain the key points, numbers and conclusion.",
+    },
+    "attachment_error": {
+        "fa": "⚠️ بررسی فایل ممکن نشد.\n\n<i>{detail}</i>",
+        "en": "⚠️ I could not inspect this attachment.\n\n<i>{detail}</i>",
+    },
     "ai_no_models": {
         "fa": "⚠️ هنوز هیچ مدل هوش مصنوعی فعالی تنظیم نشده است. با پشتیبانی تماس بگیرید.",
         "en": "⚠️ No active AI model is configured yet. Please contact support.",
@@ -125,9 +136,9 @@ STRINGS = {
     },
     "product_detail": {
         "fa": "🛍 <b>{name}</b>\n\n{description}\n\n▫️ قیمت: <b>{price}</b> تومان\n"
-              "▫️ مدت: <b>{days}</b> روز\n▫️ تعداد پیام: <b>{messages}</b>",
+              "▫️ مدت: <b>{days}</b> روز\n▫️ تعداد پیام: <b>{messages}</b>\n▫️ سهمیه: <b>{quota}</b>\n▫️ مدل‌ها: <b>{models}</b>",
         "en": "🛍 <b>{name}</b>\n\n{description}\n\n▫️ Price: <b>{price}</b>\n"
-              "▫️ Duration: <b>{days}</b> days\n▫️ Messages: <b>{messages}</b>",
+              "▫️ Duration: <b>{days}</b> days\n▫️ Messages: <b>{messages}</b>\n▫️ Quota: <b>{quota}</b>\n▫️ Models: <b>{models}</b>",
     },
     "btn_buy": {"fa": "💳 خرید", "en": "💳 Buy"},
 
@@ -284,14 +295,14 @@ STRINGS = {
         "fa": "📊 <b>آمار</b>\n\n👥 کل کاربران: <b>{users}</b>\n"
               "🆕 کاربران امروز: <b>{users_today}</b>\n"
               "💎 اشتراک فعال: <b>{active_subs}</b>\n"
-              "💬 کل پیام‌های AI: <b>{messages}</b>\n"
+              "💬 کل پیام‌های AI: <b>{messages}</b>\n🪙 کل توکن مصرف‌شده: <b>{tokens}</b>\n"
               "💰 درآمد تاییدشده: <b>{revenue}</b> تومان\n"
               "🧾 پرداخت در انتظار: <b>{pending}</b>\n"
               "🎫 تیکت باز: <b>{tickets_open}</b>",
         "en": "📊 <b>Stats</b>\n\n👥 Total users: <b>{users}</b>\n"
               "🆕 New today: <b>{users_today}</b>\n"
               "💎 Active subscriptions: <b>{active_subs}</b>\n"
-              "💬 Total AI messages: <b>{messages}</b>\n"
+              "💬 Total AI messages: <b>{messages}</b>\n🪙 Total tokens: <b>{tokens}</b>\n"
               "💰 Confirmed revenue: <b>{revenue}</b>\n"
               "🧾 Pending payments: <b>{pending}</b>\n"
               "🎫 Open tickets: <b>{tickets_open}</b>",
@@ -313,6 +324,20 @@ STRINGS = {
     "state_active": {"fa": "فعال", "en": "Active"},
     "state_banned": {"fa": "مسدود", "en": "Banned"},
     "btn_set_quota": {"fa": "🎚 تغییر سهمیه", "en": "🎚 Change quota"},
+    "btn_set_policy": {"fa": "🧠 سیاست AI کاربر", "en": "🧠 User AI policy"},
+    "admin_ask_quota_mode": {
+        "fa": "🧮 حالت سهمیه را بفرستید: messages، tokens یا both",
+        "en": "🧮 Send quota mode: messages, tokens or both",
+    },
+    "admin_ask_token_limit": {
+        "fa": "🪙 سقف توکن این کاربر را به‌صورت عدد بفرستید (صفر یعنی بدون سهمیه توکن):",
+        "en": "🪙 Send this user's token limit (zero disables token quota):",
+    },
+    "admin_ask_model_scope": {
+        "fa": "🧠 مدل‌های مجاز را با نام یا ID و با کاما بفرستید؛ برای همه بنویسید all:",
+        "en": "🧠 Send allowed model names/IDs separated by commas; use all for every model:",
+    },
+    "admin_policy_saved": {"fa": "✅ سیاست AI کاربر ذخیره شد.", "en": "✅ User AI policy saved."},
     "btn_ban": {"fa": "🚫 مسدود کردن", "en": "🚫 Ban"},
     "btn_unban": {"fa": "♻️ رفع مسدودی", "en": "♻️ Unban"},
     "btn_grant": {"fa": "🎁 اهدای اشتراک", "en": "🎁 Grant plan"},
@@ -405,10 +430,10 @@ STRINGS = {
     "admin_product_detail": {
         "fa": "🛍 <b>{name}</b>\n\n{description}\n\n▫️ قیمت: <b>{price}</b> تومان\n"
               "▫️ مدت: <b>{days}</b> روز\n▫️ تعداد پیام: <b>{messages}</b>\n"
-              "▫️ وضعیت: <b>{status}</b>",
+              "▫️ سهمیه: <b>{quota}</b>\n▫️ مدل‌ها: <b>{models}</b>\n▫️ وضعیت: <b>{status}</b>",
         "en": "🛍 <b>{name}</b>\n\n{description}\n\n▫️ Price: <b>{price}</b>\n"
               "▫️ Duration: <b>{days}</b> days\n▫️ Messages: <b>{messages}</b>\n"
-              "▫️ Status: <b>{status}</b>",
+              "▫️ Quota: <b>{quota}</b>\n▫️ Models: <b>{models}</b>\n▫️ Status: <b>{status}</b>",
     },
     "btn_edit_price": {"fa": "✏️ قیمت", "en": "✏️ Price"},
     "btn_edit_days": {"fa": "✏️ مدت اشتراک", "en": "✏️ Duration"},
@@ -509,18 +534,31 @@ STRINGS = {
     "admin_ticket_closed": {"fa": "🔒 تیکت بسته شد.", "en": "🔒 Ticket closed."},
 
     "admin_settings_title": {
-        "fa": "⚙️ <b>تنظیمات</b>\n\n▫️ سهمیه رایگان: <b>{free_limit}</b>\n"
+        "fa": "⚙️ <b>تنظیمات</b>\n\n▫️ سهمیه رایگان: <b>{free_limit}</b> پیام\n"
+              "▫️ توکن رایگان: <b>{free_tokens}</b>\n▫️ حالت سهمیه: <b>{quota_mode}</b>\n"
               "▫️ دوره رایگان: <b>{free_days}</b> روز\n"
               "▫️ محدودیت نرخ: <b>{rl_msgs}</b> پیام در <b>{rl_secs}</b> ثانیه\n"
-              "▫️ فروشگاه: <b>{shop}</b>\n▫️ پشتیبانی: <b>{support}</b>\n"
+              "▫️ استریم پاسخ: <b>{streaming}</b>\n▫️ فروشگاه: <b>{shop}</b>\n▫️ پشتیبانی: <b>{support}</b>\n"
               "▫️ حافظه گفتگو: <b>{history}</b> پیام",
-        "en": "⚙️ <b>Settings</b>\n\n▫️ Free quota: <b>{free_limit}</b>\n"
+        "en": "⚙️ <b>Settings</b>\n\n▫️ Free quota: <b>{free_limit}</b> messages\n"
+              "▫️ Free tokens: <b>{free_tokens}</b>\n▫️ Quota mode: <b>{quota_mode}</b>\n"
               "▫️ Free period: <b>{free_days}</b> days\n"
               "▫️ Rate limit: <b>{rl_msgs}</b> msgs / <b>{rl_secs}</b> s\n"
-              "▫️ Shop: <b>{shop}</b>\n▫️ Support: <b>{support}</b>\n"
+              "▫️ Streaming: <b>{streaming}</b>\n▫️ Shop: <b>{shop}</b>\n▫️ Support: <b>{support}</b>\n"
               "▫️ Chat history: <b>{history}</b> messages",
     },
     "btn_set_free_limit": {"fa": "🎚 سهمیه رایگان", "en": "🎚 Free quota"},
+    "btn_set_free_tokens": {"fa": "🪙 توکن رایگان", "en": "🪙 Free tokens"},
+    "btn_set_quota_mode": {"fa": "🧮 حالت سهمیه", "en": "🧮 Quota mode"},
+    "btn_set_model_scope": {"fa": "🧠 مدل‌های پیش‌فرض", "en": "🧠 Default models"},
+    "btn_set_stream_interval": {"fa": "⚡ سرعت نمایش", "en": "⚡ Stream speed"},
+    "btn_set_output_tokens": {"fa": "🎯 سقف خروجی", "en": "🎯 Output limit"},
+    "btn_set_file_size": {"fa": "📎 حجم فایل", "en": "📎 File size"},
+    "btn_set_product_tokens": {"fa": "🪙 توکن پلن", "en": "🪙 Plan tokens"},
+    "btn_toggle_streaming": {"fa": "✍️ پاسخ تدریجی", "en": "✍️ Streaming"},
+    "quota_mode_messages": {"fa": "پیام", "en": "messages"},
+    "quota_mode_tokens": {"fa": "توکن", "en": "tokens"},
+    "quota_mode_both": {"fa": "پیام و توکن", "en": "messages + tokens"},
     "btn_set_free_days": {"fa": "📅 دوره رایگان", "en": "📅 Free period"},
     "btn_set_rate_limit": {"fa": "🐢 محدودیت نرخ", "en": "🐢 Rate limit"},
     "btn_toggle_shop": {"fa": "🛒 فروشگاه", "en": "🛒 Shop"},
@@ -580,6 +618,10 @@ STRINGS = {
     "v_bad_card": {
         "fa": "شماره کارت باید ۱۶ رقم باشد.",
         "en": "card number must be 16 digits.",
+    },
+    "v_bad_quota_mode": {
+        "fa": "حالت سهمیه باید messages، tokens یا both باشد.",
+        "en": "quota mode must be messages, tokens or both.",
     },
     "v_duplicate_name": {
         "fa": "این نام قبلاً استفاده شده است.",

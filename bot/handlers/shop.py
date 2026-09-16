@@ -58,6 +58,10 @@ async def shop_item(update, context):
         price=_money(product["price"]),
         days=product["duration_days"],
         messages=product["messages_count"],
+        quota=(product.get("quota_mode") or "messages") +
+              ((" / " + _money(product.get("token_count")) + " tokens")
+               if int(product.get("token_count") or 0) else ""),
+        models=esc(product.get("model_scope") or "all"),
     )
     return await safe_edit(query, text, kb.product_detail_menu(lang, product["id"]))
 

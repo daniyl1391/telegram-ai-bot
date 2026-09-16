@@ -55,7 +55,14 @@ missing or malformed, instead of crashing on an opaque `InvalidToken`.
 
 ### 🤖 AI
 - Chat with the AI by simply typing in the bot.
-- **Multi-model**: add as many providers as you want from the panel.
+- **Fast progressive streaming**: compatible providers stream tokens and the bot
+  edits one Telegram message at a controlled interval, with an automatic JSON
+  fallback when a provider does not support streaming.
+- **Multimodal input**: send a photo with a caption, PDF, DOCX, TXT, CSV, JSON or
+  code file and the bot downloads it safely, extracts text or sends an image data
+  URL to a vision-capable model. Receipt photos remain in the payment-review flow.
+- **Multi-model**: add as many providers as you want from the panel. A paid plan
+  can be restricted to selected model IDs/names, or allowed to use all models.
 - **OpenAI-compatible** request format, so OpenAI, OpenRouter, Groq, Together,
   DeepSeek, Azure and most proxies work out of the box. Replies are also parsed
   from Anthropic-native, Gemini-native and simple custom shapes.
@@ -63,19 +70,29 @@ missing or malformed, instead of crashing on an opaque `InvalidToken`.
   the next one when a key is rejected.
 - Retry with exponential backoff on timeouts, connection errors and 429/5xx.
 - Per-user conversation memory, with a configurable depth and a clear button.
+- **Usage metering**: provider usage metadata is stored when available; otherwise
+  a conservative estimate is shown. Subscriptions can charge by messages, tokens,
+  or whichever quota is exhausted first.
 - A user is **never charged for a failed request**.
 
 ### 👑 Admin panel (`/admin`)
 | Section | What you can do |
 |---|---|
-| 👥 Users | Paginated list, search by ID/username, per-user detail, change quota, grant a plan, DM a user, ban / unban |
+| 👥 Users | Paginated list, search by ID/username, per-user detail, change message quota, configure token quota/model policy, grant a plan, DM a user, ban / unban |
 | 🤖 AI Models | Add, edit name / API URL / API key / model ID, **test connection**, set default, enable/disable, delete |
 | 🛒 Shop | Create products with price, duration and message count; edit any field; enable/disable; delete |
 | 💳 Payments | Pending queue, receipt view, one-tap **approve / reject**, set card number and card holder, toggle the online gateway |
 | 🎫 Tickets | Open ticket list, full conversation view, reply to the user, close |
 | 📊 Stats | Users, new today, active subscriptions, AI messages, confirmed revenue, pending payments, open tickets |
-| ⚙️ Settings | Free quota, free period, rate limit, chat history depth, system prompt, shop and support toggles |
+| ⚙️ Settings | Free message/token quota, quota mode, rate limit, stream speed, output limit, file size, history, system prompt, model scope, shop/support toggles |
 | 📢 Broadcast | Send a message to every non-banned user |
+
+### 🧮 Quota and plan policy
+- Each product can define message quota, token quota, duration, and an allowed
+  model scope (`all` or comma-separated model names/IDs).
+- Admins can grant the same product to a user without a payment.
+- Usage is recorded in `ai_usage` with prompt/completion/total tokens, latency and
+  input type (`text`/`image`). The account screen shows token consumption.
 
 ### 💳 Payments
 Card-to-card with manual approval: the user picks a product, sees your card
@@ -123,9 +140,10 @@ bot/
 │   ├── admin.py           the admin panel
 │   └── errors.py          global error handler
 ├── services/
-│   ├── ai_manager.py      provider client, retries, key rotation
+│   ├── ai_manager.py      streaming provider client, retries, key rotation, usage
 │   ├── payment.py         atomic approval flow
-│   └── subscription.py    quota and expiry rules
+│   └── subscription.py    message/token quotas and model policy
+├── media.py               safe photo/PDF/DOCX/text attachment pipeline
 └── admin/panel.py         privileged write operations
 tests.py                   65 tests
 tests_stubs/               offline stand-ins used only by tests.py

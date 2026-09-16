@@ -1,9 +1,6 @@
-"""AI chat: the feature the old bot advertised but never wired up.
-
-There was no MessageHandler at all, so typing to the bot did nothing and
-ai_manager.chat() was never called from anywhere.
-"""
+"""AI chat handler: multimodal inputs, fast streaming edits and fair metering."""
 import logging
+import time
 
 from telegram.constants import ChatAction
 
@@ -15,6 +12,7 @@ from bot.services.subscription import subscription_manager, OK, EXPIRED
 from bot.handlers.common import (
     lang_of, safe_edit, reply, parse_callback, clear_flow, set_flow, send_kwargs,
 )
+from bot.media import prepare_attachment, MediaError
 from bot import keyboards as kb
 
 logger = logging.getLogger(__name__)
@@ -22,8 +20,23 @@ logger = logging.getLogger(__name__)
 
 def _active_model_name(user_id, context):
     chosen = context.user_data.get("model_pk")
-    model = ai_manager.resolve_model(model_pk=chosen)
+    model = ai_manager.resolve_model(model_pk=chosen, user_id=user_id)
     return (model or {}).get("name")
+
+
+def _answer_body(answer, model_name, lang, remaining, usage=None):
+    answer = str(answer or "")
+    usage = usage or {}
+    tokens = int(usage.get("total_tokens") or 0)
+    estimate_mark = " ~" if usage.get("estimated") else ""
+    meta = "<i>🤖 %s · %s: %s · %s%s</i>" % (
+        esc(model_name), t("btn_account", lang), remaining,
+        t("ai_tokens", lang), estimate_mark + str(tokens),
+    )
+    body = "%s\n\n%s" % (esc(answer), meta)
+    if len(body) > 4096:
+        body = esc(answer)[:3900] + "\n\n<i>…</i>"
+    return body
 
 
 async def open_ai(update, context):
@@ -32,7 +45,7 @@ async def open_ai(update, context):
         await query.answer()
     lang = lang_of(update, context)
     clear_flow(context)
-    models = ai_manager.list_models()
+    models = ai_manager.list_models(user_id=update.effective_user.id)
     if not models:
         text = t("ai_no_models", lang)
         markup = kb.back_to_main(lang)
@@ -53,7 +66,7 @@ async def model_picker(update, context):
     query = update.callback_query
     await query.answer()
     lang = lang_of(update, context)
-    models = ai_manager.list_models()
+    models = ai_manager.list_models(user_id=update.effective_user.id)
     if not models:
         return await safe_edit(query, t("ai_no_models", lang), kb.back_to_main(lang))
     active = _active_model_name(update.effective_user.id, context)
@@ -71,7 +84,7 @@ async def model_use(update, context):
         await query.answer(t("unknown_action", lang), show_alert=True)
         return None
     model = get_db().get_ai_model(model_pk)
-    if not model or not model["status"]:
+    if not model or not model["status"] or not ai_manager.is_model_allowed(update.effective_user.id, model):
         await query.answer(t("unknown_action", lang), show_alert=True)
         return None
     context.user_data["model_pk"] = model_pk
@@ -88,44 +101,92 @@ async def clear_history(update, context):
     return await open_ai(update, context)
 
 
+async def _edit_answer(placeholder, answer, model_name, lang, remaining, usage):
+    if not placeholder:
+        return
+    try:
+        await placeholder.edit_text(
+            _answer_body(answer, model_name, lang, remaining, usage), **send_kwargs())
+    except Exception:
+        # Telegram can reject an intermediate edit while a message is changing;
+        # the final edit/send in handle_prompt still delivers the answer.
+        logger.debug("stream edit failed", exc_info=True)
+
+
 async def handle_prompt(update, context):
-    """Called by the text router for any plain message that is not part of a flow."""
+    """Handle text, photos and supported documents outside another flow."""
     lang = lang_of(update, context)
     user_id = update.effective_user.id
     message = update.effective_message
-    prompt = (message.text or "").strip()
+    db = get_db()
 
-    if not prompt:
+    is_attachment = bool(getattr(message, "photo", None) or getattr(message, "document", None))
+    prompt = (getattr(message, "text", None) or getattr(message, "caption", None) or "").strip()
+    if is_attachment:
+        try:
+            max_bytes = max(1, db.get_int_setting("max_file_mb", 10)) * 1024 * 1024
+            prompt, _label = await prepare_attachment(
+                message, context.bot, max_bytes,
+                default_prompt=t("attachment_default_prompt", lang),
+            )
+        except MediaError as exc:
+            return await reply(update, t("attachment_error", lang, detail=esc(str(exc))))
+        except Exception as exc:
+            logger.warning("attachment download failed for user %s: %s", user_id, exc)
+            return await reply(update, t("attachment_error", lang, detail=t("generic_error", lang)))
+    elif not prompt:
         return None
-    if len(prompt) > MAX_MESSAGE_CHARS:
+
+    # Text length applies to the visible request, while extracted files have a
+    # larger internal cap in media.py.
+    visible_prompt = "".join(
+        item.get("text", "") for item in prompt if isinstance(item, dict)
+    ) if isinstance(prompt, list) else prompt
+    if len(visible_prompt) > MAX_MESSAGE_CHARS and not is_attachment:
         return await reply(update, t("msg_too_long", lang, max=MAX_MESSAGE_CHARS))
 
     allowed, retry_after = check_flood(user_id)
     if not allowed:
         return await reply(update, t("rate_limited", lang, seconds=retry_after))
-    if not check_duplicate(user_id, prompt):
+    if not check_duplicate(user_id, visible_prompt):
         return await reply(update, t("spam_duplicate", lang))
 
     state, _sub = subscription_manager.status(user_id)
     if state == EXPIRED:
         return await reply(update, t("sub_expired", lang),
-                           kb.account_menu(lang, get_db().get_bool_setting("shop_enabled", True)))
+                           kb.account_menu(lang, db.get_bool_setting("shop_enabled", True)))
     if state != OK:
         return await reply(update, t("quota_exhausted", lang),
-                           kb.account_menu(lang, get_db().get_bool_setting("shop_enabled", True)))
+                           kb.account_menu(lang, db.get_bool_setting("shop_enabled", True)))
 
-    if not ai_manager.list_models():
+    if not ai_manager.list_models(user_id=user_id):
         return await reply(update, t("ai_no_models", lang), kb.back_to_main(lang))
 
     placeholder = await reply(update, t("ai_thinking", lang))
     try:
         await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.TYPING)
     except Exception:
-        pass  # chat action is cosmetic, never fail the request over it
+        pass
+
+    stream_state = {"answer": "", "last_edit": 0.0}
+    interval = max(100, db.get_int_setting("stream_edit_interval_ms", 700)) / 1000.0
+    stream_enabled = db.get_bool_setting("ai_streaming", True)
+
+    async def on_delta(delta):
+        stream_state["answer"] += str(delta or "")
+        now = time.monotonic()
+        if now - stream_state["last_edit"] >= interval:
+            stream_state["last_edit"] = now
+            await _edit_answer(
+                placeholder, stream_state["answer"],
+                _active_model_name(user_id, context) or "AI", lang,
+                subscription_manager.remaining(user_id), ai_manager.last_usage(user_id),
+            )
 
     try:
         answer, model_name = await ai_manager.chat(
-            user_id, prompt, model_pk=context.user_data.get("model_pk")
+            user_id, prompt, model_pk=context.user_data.get("model_pk"),
+            stream_callback=on_delta if stream_enabled else None,
         )
     except AIError as exc:
         logger.warning("AI failed for user %s: %s", user_id, exc)
@@ -138,14 +199,10 @@ async def handle_prompt(update, context):
                 pass
         return await reply(update, text)
 
-    # Only charge the user once the provider actually answered.
-    subscription_manager.consume(user_id)
+    usage = ai_manager.last_usage(user_id)
+    subscription_manager.consume(user_id, tokens=usage.get("total_tokens", 0))
     remaining = subscription_manager.remaining(user_id)
-    body = "%s\n\n<i>🤖 %s · %s: %s</i>" % (
-        esc(answer), esc(model_name), t("btn_account", lang), remaining
-    )
-    if len(body) > 4096:
-        body = esc(answer)[:3900] + "\n\n<i>…</i>"
+    body = _answer_body(answer, model_name, lang, remaining, usage)
 
     if placeholder:
         try:

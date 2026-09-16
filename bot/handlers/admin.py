@@ -37,6 +37,10 @@ NUMERIC_SETTINGS = {
     "rate_limit_messages": (0, 1000),
     "rate_limit_seconds": (0, 3600),
     "ai_max_history": (0, 50),
+    "free_token_limit": (0, 1000000000),
+    "stream_edit_interval_ms": (100, 5000),
+    "ai_max_output_tokens": (0, 100000),
+    "max_file_mb": (1, 50),
     "ai_timeout_seconds": (5, 300),
     "ai_max_retries": (1, 10),
 }
@@ -54,6 +58,23 @@ def _int(value, default=0):
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _normalize_quota_mode(raw):
+    value = str(raw or "").strip().lower()
+    aliases = {"پیام": "messages", "توکن": "tokens", "هر دو": "both", "both": "both"}
+    value = aliases.get(value, value)
+    if value not in ("messages", "tokens", "both"):
+        raise ValidationError("v_bad_quota_mode")
+    return value
+
+
+def _quota_label(mode, token_count, lang):
+    mode = str(mode or "messages").lower()
+    label = t("quota_mode_" + mode if mode in ("messages", "tokens", "both") else "quota_mode_messages", lang)
+    if mode in ("tokens", "both") and int(token_count or 0):
+        label += " (%s)" % _money(token_count)
+    return label
 
 
 # ------------------------------------------------------------------ entrypoints
@@ -110,6 +131,7 @@ async def _stats(update, context, lang, rest):
              users_today=db.count_users_since(midnight),
              active_subs=db.count_active_subscriptions(),
              messages=db.count_ai_messages(),
+             tokens=db.total_ai_tokens(),
              revenue=_money(db.total_revenue()),
              pending=db.count_payments("pending"),
              tickets_open=db.count_tickets(open_only=True))
@@ -179,6 +201,17 @@ async def _quota(update, context, lang, rest):
                            kb.cancel_only(lang))
 
 
+async def _policy(update, context, lang, rest):
+    user_id = _int(rest[0] if rest else 0)
+    if not get_db().get_user(user_id):
+        await update.callback_query.answer(t("admin_user_not_found", lang), show_alert=True)
+        return None
+    await update.callback_query.answer()
+    set_flow(context, "admin_user_policy", step="mode", user_id=user_id)
+    return await safe_edit(update.callback_query, t("admin_ask_quota_mode", lang),
+                           kb.cancel_only(lang))
+
+
 async def _ban(update, context, lang, rest):
     query = update.callback_query
     db = get_db()
@@ -214,7 +247,12 @@ async def _grantp(update, context, lang, rest):
         await query.answer(t("unknown_action", lang), show_alert=True)
         return None
     messages = _int(product["messages_count"]) or 1000
-    subscription_manager.grant_plan(user_id, "premium", messages, _int(product["duration_days"], 30))
+    subscription_manager.grant_plan(
+        user_id, "premium", messages, _int(product["duration_days"], 30),
+        quota_mode=product.get("quota_mode", "messages"),
+        token_limit=_int(product.get("token_count"), 0),
+        model_scope=product.get("model_scope", "all"),
+    )
     await query.answer(t("admin_user_updated", lang))
     try:
         user_lang = get_db().get_language(user_id)
@@ -364,6 +402,8 @@ async def _product(update, context, lang, rest):
              price=_money(product["price"]),
              days=product["duration_days"],
              messages=product["messages_count"],
+             quota=_quota_label(product.get("quota_mode"), product.get("token_count"), lang),
+             models=esc(product.get("model_scope") or "all"),
              status=t("on" if product["status"] else "off", lang))
     return await safe_edit(query, text, kb.admin_product_menu(lang, product["id"]))
 
@@ -380,6 +420,9 @@ _PRODUCT_FIELD_PROMPTS = {
     "price": "admin_product_ask_price",
     "duration_days": "admin_product_ask_days",
     "messages_count": "admin_product_ask_messages",
+    "quota_mode": "admin_ask_text",
+    "token_count": "admin_ask_number",
+    "model_scope": "admin_ask_text",
     "description": "admin_product_ask_desc",
 }
 
@@ -586,34 +629,38 @@ async def _settings(update, context, lang, rest):
     db = get_db()
     text = t("admin_settings_title", lang,
              free_limit=db.get_int_setting("free_message_limit", 10),
+             free_tokens=db.get_int_setting("free_token_limit", 100000),
+             quota_mode=_quota_label(db.get_setting("default_quota_mode", "messages"), 0, lang),
              free_days=db.get_int_setting("free_period_days", 30),
              rl_msgs=db.get_int_setting("rate_limit_messages", 5),
              rl_secs=db.get_int_setting("rate_limit_seconds", 60),
+             streaming=t("on" if db.get_bool_setting("ai_streaming", True) else "off", lang),
              shop=t("on" if db.get_bool_setting("shop_enabled", True) else "off", lang),
              support=t("on" if db.get_bool_setting("support_enabled", True) else "off", lang),
              history=db.get_int_setting("ai_max_history", 8))
     return await safe_edit(update.callback_query, text,
                            kb.admin_settings_menu(lang,
                                                   db.get_bool_setting("shop_enabled", True),
-                                                  db.get_bool_setting("support_enabled", True)))
+                                                  db.get_bool_setting("support_enabled", True),
+                                                  db.get_bool_setting("ai_streaming", True)))
 
 
 async def _set(update, context, lang, rest):
     query = update.callback_query
     key = rest[0] if rest else ""
-    if key not in NUMERIC_SETTINGS and key != "ai_system_prompt":
+    if key not in NUMERIC_SETTINGS and key not in ("ai_system_prompt", "default_quota_mode", "default_model_scope"):
         await query.answer(t("unknown_action", lang), show_alert=True)
         return None
     await query.answer()
     set_flow(context, "admin_setting", step=key)
-    prompt = "admin_ask_text" if key == "ai_system_prompt" else "admin_ask_number"
+    prompt = "admin_ask_text" if key in ("ai_system_prompt", "default_quota_mode", "default_model_scope") else "admin_ask_number"
     return await safe_edit(query, t(prompt, lang), kb.cancel_only(lang))
 
 
 async def _toggle(update, context, lang, rest):
     query = update.callback_query
     key = rest[0] if rest else ""
-    if key not in ("shop_enabled", "support_enabled"):
+    if key not in ("shop_enabled", "support_enabled", "ai_streaming"):
         await query.answer(t("unknown_action", lang), show_alert=True)
         return None
     db = get_db()
@@ -631,7 +678,7 @@ async def _bcast(update, context, lang, rest):
 
 _ROUTES = {
     "home": _home, "stats": _stats,
-    "users": _users, "user": _user, "usearch": _usearch, "quota": _quota,
+    "users": _users, "user": _user, "usearch": _usearch, "quota": _quota, "policy": _policy,
     "ban": _ban, "grant": _grant, "grantp": _grantp, "dm": _dm,
     "models": _models, "model": _model, "addmodel": _addmodel, "medit": _medit,
     "mtest": _mtest, "mdefault": _mdefault, "mtoggle": _mtoggle, "mdel": _mdel,
@@ -684,6 +731,23 @@ async def handle_admin_text(update, context, flow):
             return await reply(update, _user_detail_text(lang, uid),
                                kb.admin_user_menu(lang, uid, db.is_banned(uid)))
 
+        if name == "admin_user_policy":
+            if step == "mode":
+                update_flow(context, step="tokens", quota_mode=_normalize_quota_mode(raw))
+                return await reply(update, t("admin_ask_token_limit", lang), kb.cancel_only(lang))
+            if step == "tokens":
+                update_flow(context, step="scope", token_limit=validate_int(raw, 0, 1_000_000_000))
+                return await reply(update, t("admin_ask_model_scope", lang), kb.cancel_only(lang))
+            if step == "scope":
+                scope = validate_text(raw, 1, 500)
+                subscription_manager.set_policy(
+                    data["user_id"], quota_mode=data.get("quota_mode"),
+                    token_limit=data.get("token_limit"), model_scope=scope)
+                clear_flow(context)
+                uid = data["user_id"]
+                return await reply(update, t("admin_policy_saved", lang),
+                                   kb.admin_user_menu(lang, uid, db.is_banned(uid)))
+
         if name == "admin_dm":
             text = validate_text(raw, 1, 3000)
             clear_flow(context)
@@ -732,6 +796,10 @@ async def handle_admin_text(update, context, flow):
         if name == "admin_setting":
             if step == "ai_system_prompt":
                 db.set_setting(step, validate_text(raw, 1, 1000))
+            elif step == "default_quota_mode":
+                db.set_setting(step, _normalize_quota_mode(raw))
+            elif step == "default_model_scope":
+                db.set_setting(step, validate_text(raw, 1, 500))
             else:
                 low, high = NUMERIC_SETTINGS[step]
                 db.set_setting(step, validate_int(raw, low, high))
@@ -794,6 +862,12 @@ def _validate_product_field(field, raw):
         return validate_int(raw, 1, 3650)
     if field == "messages_count":
         return validate_int(raw, 0, 10_000_000)
+    if field == "token_count":
+        return validate_int(raw, 0, 1_000_000_000)
+    if field == "quota_mode":
+        return _normalize_quota_mode(raw)
+    if field == "model_scope":
+        return validate_text(raw, 1, 500)
     if field == "description":
         return "" if raw == "-" else validate_text(raw, 1, MAX_DESC_CHARS)
     return validate_text(raw, 1, MAX_NAME_CHARS)

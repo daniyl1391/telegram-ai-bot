@@ -171,6 +171,7 @@ def admin_user_menu(lang, user_id, banned):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(t("btn_set_quota", lang), callback_data="adm:quota:%s" % user_id),
          InlineKeyboardButton(t("btn_grant", lang), callback_data="adm:grant:%s" % user_id)],
+        [InlineKeyboardButton(t("btn_set_policy", lang), callback_data="adm:policy:%s" % user_id)],
         [InlineKeyboardButton(t("btn_message_user", lang), callback_data="adm:dm:%s" % user_id)],
         [InlineKeyboardButton(
             t("btn_unban", lang) if banned else t("btn_ban", lang),
@@ -218,6 +219,9 @@ def admin_product_menu(lang, product_id):
         [InlineKeyboardButton(t("btn_edit_days", lang), callback_data="adm:pedit:duration_days:%s" % product_id),
          InlineKeyboardButton(t("btn_edit_messages", lang), callback_data="adm:pedit:messages_count:%s" % product_id)],
         [InlineKeyboardButton(t("btn_edit_desc", lang), callback_data="adm:pedit:description:%s" % product_id)],
+        [InlineKeyboardButton(t("btn_set_quota_mode", lang), callback_data="adm:pedit:quota_mode:%s" % product_id),
+         InlineKeyboardButton(t("btn_set_product_tokens", lang), callback_data="adm:pedit:token_count:%s" % product_id)],
+        [InlineKeyboardButton(t("btn_set_model_scope", lang), callback_data="adm:pedit:model_scope:%s" % product_id)],
         [InlineKeyboardButton(t("btn_toggle_status", lang), callback_data="adm:ptoggle:%s" % product_id),
          InlineKeyboardButton(t("btn_delete", lang), callback_data="adm:pdel:%s" % product_id)],
         [InlineKeyboardButton(t("btn_back", lang), callback_data="adm:products")],
@@ -263,13 +267,22 @@ def admin_tickets_menu(lang, tickets):
     return InlineKeyboardMarkup(rows)
 
 
-def admin_settings_menu(lang, shop_on, support_on):
+def admin_settings_menu(lang, shop_on, support_on, streaming_on=True):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(t("btn_set_free_limit", lang), callback_data="adm:set:free_message_limit"),
-         InlineKeyboardButton(t("btn_set_free_days", lang), callback_data="adm:set:free_period_days")],
+         InlineKeyboardButton(t("btn_set_free_tokens", lang), callback_data="adm:set:free_token_limit")],
+        [InlineKeyboardButton(t("btn_set_quota_mode", lang), callback_data="adm:set:default_quota_mode"),
+         InlineKeyboardButton(t("btn_set_model_scope", lang), callback_data="adm:set:default_model_scope")],
+        [InlineKeyboardButton(t("btn_set_free_days", lang), callback_data="adm:set:free_period_days")],
         [InlineKeyboardButton(t("btn_set_rate_limit", lang), callback_data="adm:set:rate_limit_messages"),
          InlineKeyboardButton(t("btn_set_history", lang), callback_data="adm:set:ai_max_history")],
-        [InlineKeyboardButton(t("btn_set_prompt", lang), callback_data="adm:set:ai_system_prompt")],
+        [InlineKeyboardButton(t("btn_set_stream_interval", lang), callback_data="adm:set:stream_edit_interval_ms"),
+         InlineKeyboardButton(t("btn_set_output_tokens", lang), callback_data="adm:set:ai_max_output_tokens")],
+        [InlineKeyboardButton(t("btn_set_file_size", lang), callback_data="adm:set:max_file_mb"),
+         InlineKeyboardButton(t("btn_set_prompt", lang), callback_data="adm:set:ai_system_prompt")],
+        [InlineKeyboardButton(
+            "%s %s" % (t("btn_toggle_streaming", lang), "🟢" if streaming_on else "🔴"),
+            callback_data="adm:toggle:ai_streaming")],
         [InlineKeyboardButton(
             "%s %s" % (t("btn_toggle_shop", lang), "🟢" if shop_on else "🔴"),
             callback_data="adm:toggle:shop_enabled"),

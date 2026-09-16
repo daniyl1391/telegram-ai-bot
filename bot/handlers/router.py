@@ -15,7 +15,7 @@ from bot import keyboards as kb
 logger = logging.getLogger(__name__)
 
 ADMIN_FLOWS = {
-    "admin_usearch", "admin_quota", "admin_dm", "admin_add_model", "admin_medit",
+    "admin_usearch", "admin_quota", "admin_user_policy", "admin_dm", "admin_add_model", "admin_medit",
     "admin_add_product", "admin_pedit", "admin_setcard", "admin_setholder",
     "admin_setting", "admin_tkreply", "admin_bcast",
 }
@@ -58,10 +58,9 @@ async def route_message(update, context):
     if name == "await_receipt":
         return await shop_handlers.handle_receipt(update, context)
 
-    if message.photo or message.document:
-        # A stray attachment with no open payment order.
-        return await reply(update, t("pay_no_pending", lang), kb.back_to_main(lang))
-
+    # Outside checkout, attachments are AI inputs (photos, PDFs, DOCX and text
+    # files) rather than dead-end messages. Receipt photos are intercepted by
+    # the await_receipt flow above.
     return await ai_chat.handle_prompt(update, context)
 
 

@@ -30,7 +30,7 @@ from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 # --------------------------------------------------------------------- helpers
@@ -144,6 +144,10 @@ class Database:
                     message_limit INTEGER NOT NULL DEFAULT 10,
                     message_used  INTEGER NOT NULL DEFAULT 0,
                     expire_date   TEXT,
+                    quota_mode    TEXT    NOT NULL DEFAULT 'messages',
+                    token_limit   INTEGER NOT NULL DEFAULT 0,
+                    token_used    INTEGER NOT NULL DEFAULT 0,
+                    model_scope   TEXT    NOT NULL DEFAULT 'all',
                     created_at    TEXT    NOT NULL,
                     FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
                 );
@@ -167,6 +171,9 @@ class Database:
                     price          INTEGER NOT NULL DEFAULT 0,
                     duration_days  INTEGER NOT NULL DEFAULT 30,
                     messages_count INTEGER NOT NULL DEFAULT 0,
+                    quota_mode    TEXT    NOT NULL DEFAULT 'messages',
+                    token_count   INTEGER NOT NULL DEFAULT 0,
+                    model_scope   TEXT    NOT NULL DEFAULT 'all',
                     status         INTEGER DEFAULT 1,
                     created_at     TEXT NOT NULL
                 );
@@ -215,6 +222,11 @@ class Database:
                     user_id    INTEGER NOT NULL,
                     model_name TEXT,
                     ok         INTEGER DEFAULT 1,
+                    prompt_tokens INTEGER DEFAULT 0,
+                    completion_tokens INTEGER DEFAULT 0,
+                    total_tokens INTEGER DEFAULT 0,
+                    latency_ms INTEGER DEFAULT 0,
+                    input_type TEXT DEFAULT 'text',
                     created_at TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_usage_user ON ai_usage(user_id, id DESC);
@@ -246,6 +258,18 @@ class Database:
             ("payments", "reviewed_at", "TEXT"),
             ("payments", "reviewed_by", "INTEGER"),
             ("support_tickets", "updated_at", "TEXT"),
+            ("subscriptions", "quota_mode", "TEXT NOT NULL DEFAULT 'messages'"),
+            ("subscriptions", "token_limit", "INTEGER NOT NULL DEFAULT 0"),
+            ("subscriptions", "token_used", "INTEGER NOT NULL DEFAULT 0"),
+            ("subscriptions", "model_scope", "TEXT NOT NULL DEFAULT 'all'"),
+            ("products", "quota_mode", "TEXT NOT NULL DEFAULT 'messages'"),
+            ("products", "token_count", "INTEGER NOT NULL DEFAULT 0"),
+            ("products", "model_scope", "TEXT NOT NULL DEFAULT 'all'"),
+            ("ai_usage", "prompt_tokens", "INTEGER DEFAULT 0"),
+            ("ai_usage", "completion_tokens", "INTEGER DEFAULT 0"),
+            ("ai_usage", "total_tokens", "INTEGER DEFAULT 0"),
+            ("ai_usage", "latency_ms", "INTEGER DEFAULT 0"),
+            ("ai_usage", "input_type", "TEXT DEFAULT 'text'"),
         ):
             existing = {r["name"] for r in self.query("PRAGMA table_info(%s)" % table)}
             if existing and column not in existing:
@@ -340,12 +364,18 @@ class Database:
             (user_id,),
         )
 
-    def create_subscription(self, user_id, plan, message_limit, duration_days=30):
+    def create_subscription(self, user_id, plan, message_limit, duration_days=30,
+                            quota_mode="messages", token_limit=0, model_scope="all"):
         expire = iso(utcnow() + timedelta(days=int(duration_days))) if duration_days else None
+        mode = str(quota_mode or "messages").strip().lower()
+        if mode not in ("messages", "tokens", "both"):
+            mode = "messages"
         return self.execute(
             "INSERT INTO subscriptions (user_id, plan, message_limit, message_used, "
-            "expire_date, created_at) VALUES (?, ?, ?, 0, ?, ?)",
-            (user_id, plan, int(message_limit), expire, iso(utcnow())),
+            "expire_date, quota_mode, token_limit, token_used, model_scope, created_at) "
+            "VALUES (?, ?, ?, 0, ?, ?, ?, 0, ?, ?)",
+            (user_id, plan, int(message_limit), expire, mode, int(token_limit or 0),
+             str(model_scope or "all"), iso(utcnow())),
         )
 
     def set_message_limit(self, subscription_id, limit):
@@ -354,10 +384,29 @@ class Database:
             (int(limit), subscription_id),
         )
 
-    def increment_message_used(self, subscription_id):
+    def set_subscription_policy(self, subscription_id, quota_mode=None, token_limit=None,
+                                model_scope=None):
+        fields, params = [], []
+        if quota_mode is not None:
+            mode = str(quota_mode).strip().lower()
+            if mode in ("messages", "tokens", "both"):
+                fields.append("quota_mode = ?")
+                params.append(mode)
+        if token_limit is not None:
+            fields.append("token_limit = ?")
+            params.append(int(token_limit))
+        if model_scope is not None:
+            fields.append("model_scope = ?")
+            params.append(str(model_scope or "all"))
+        if fields:
+            params.append(subscription_id)
+            self.execute("UPDATE subscriptions SET %s WHERE id = ?" % ", ".join(fields), tuple(params))
+
+    def increment_usage(self, subscription_id, messages=1, tokens=0):
         self.execute(
-            "UPDATE subscriptions SET message_used = message_used + 1 WHERE id = ?",
-            (subscription_id,),
+            "UPDATE subscriptions SET message_used = message_used + ?, "
+            "token_used = token_used + ? WHERE id = ?",
+            (max(0, int(messages or 0)), max(0, int(tokens or 0)), subscription_id),
         )
 
     def count_active_subscriptions(self):
@@ -470,7 +519,8 @@ class Database:
         )
 
     def update_product(self, product_id, **fields):
-        allowed = {"name", "description", "price", "duration_days", "messages_count", "status"}
+        allowed = {"name", "description", "price", "duration_days", "messages_count",
+                   "quota_mode", "token_count", "model_scope", "status"}
         sets, params = [], []
         for key, value in fields.items():
             if key in allowed:
@@ -602,14 +652,23 @@ class Database:
         )
 
     # ----------------------------------------------------------------- usage
-    def log_ai_usage(self, user_id, model_name, ok=True):
+    def log_ai_usage(self, user_id, model_name, ok=True, prompt_tokens=0,
+                     completion_tokens=0, total_tokens=0, latency_ms=0, input_type="text"):
         self.execute(
-            "INSERT INTO ai_usage (user_id, model_name, ok, created_at) VALUES (?, ?, ?, ?)",
-            (user_id, model_name, 1 if ok else 0, iso(utcnow())),
+            "INSERT INTO ai_usage (user_id, model_name, ok, prompt_tokens, "
+            "completion_tokens, total_tokens, latency_ms, input_type, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (user_id, model_name, 1 if ok else 0, int(prompt_tokens or 0),
+             int(completion_tokens or 0), int(total_tokens or 0), int(latency_ms or 0),
+             str(input_type or "text"), iso(utcnow())),
         )
 
     def count_ai_messages(self):
         return int(self.scalar("SELECT COUNT(*) FROM ai_usage WHERE ok = 1"))
+
+    def total_ai_tokens(self):
+        return int(self.scalar(
+            "SELECT COALESCE(SUM(total_tokens), 0) FROM ai_usage WHERE ok = 1"))
 
     def count_users_since(self, since_dt):
         return int(self.scalar(
